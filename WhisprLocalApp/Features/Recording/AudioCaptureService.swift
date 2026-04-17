@@ -50,31 +50,39 @@ final class AudioCaptureService {
     let levelStream: AsyncStream<Float>
     private let levelContinuation: AsyncStream<Float>.Continuation
 
-    private let permission: RecordingPermissionAuthority
     private let inboxURLProvider: @Sendable () -> URL?
     private let notificationCenter: DarwinNotificationCenter
     private let sourceBundleIdProvider: @Sendable () -> String?
+    private let engineStarter: @Sendable (AVAudioEngine) throws -> Void
     private let logger = Logger(subsystem: "com.praggy.whisprlocal.app", category: "AudioCapture")
 
-    private var engine: AVAudioEngine?
-    private var converter: AudioConverter?
-    private var outputFile: AVAudioFile?
-    private var currentFileURL: URL?
+    // These five are `internal` (not `private`) so the DEBUG-only testing
+    // extension in AudioCaptureService+Testing.swift can read them. They
+    // stay invisible outside this module.
+    var engine: AVAudioEngine?
+    var converter: AudioConverter?
+    var outputFile: AVAudioFile?
+    var currentFileURL: URL?
+    // Strong handle to the box the tap closure reads from. Held here so
+    // stop()/cancel() can clear `fileBox.file` before new tap buffers are
+    // dispatched — any in-flight serial-queue block short-circuits on a
+    // nil `file` and becomes a no-op.
+    var fileBox: AudioFileBox?
     private let serialQueue = DispatchQueue(
         label: "com.praggy.whisprlocal.capture",
         qos: .userInitiated
     )
 
     init(
-        permission: RecordingPermissionAuthority = AVRecordingPermissionAuthority(),
         inboxURLProvider: @escaping @Sendable () -> URL? = { AppGroupPaths.inboxURL },
         notificationCenter: DarwinNotificationCenter = SystemDarwinNotificationCenter(),
-        sourceBundleIdProvider: @escaping @Sendable () -> String? = { Bundle.main.bundleIdentifier }
+        sourceBundleIdProvider: @escaping @Sendable () -> String? = { Bundle.main.bundleIdentifier },
+        engineStarter: @escaping @Sendable (AVAudioEngine) throws -> Void = { try $0.start() }
     ) {
-        self.permission = permission
         self.inboxURLProvider = inboxURLProvider
         self.notificationCenter = notificationCenter
         self.sourceBundleIdProvider = sourceBundleIdProvider
+        self.engineStarter = engineStarter
         let (stream, continuation) = AsyncStream.makeStream(of: Float.self)
         self.levelStream = stream
         self.levelContinuation = continuation
@@ -115,9 +123,36 @@ final class AudioCaptureService {
 
         engine.prepare()
         do {
-            try engine.start()
+            try engineStarter(engine)
         } catch {
             inputNode.removeTap(onBus: 0)
+
+            // Pull the URL out before we drop state so we can clean up
+            // the zero-byte WAV AVAudioFile already created on disk.
+            // Without this cleanup each retry leaves another orphan .wav
+            // behind in the App Group inbox; InboxJobWatcher would then
+            // try to transcribe an empty file.
+            let orphanURL = currentFileURL
+
+            // Drop the AVAudioFile reference *before* removing the file
+            // so the RIFF write handle is closed first; otherwise
+            // removeItem can fail silently on some volumes.
+            self.fileBox?.file = nil
+            self.fileBox = nil
+            self.outputFile = nil
+            self.engine = nil
+            self.converter = nil
+            self.currentFileURL = nil
+
+            try? AVAudioSession.sharedInstance().setActive(
+                false,
+                options: .notifyOthersOnDeactivation
+            )
+
+            if let orphanURL {
+                try? FileManager.default.removeItem(at: orphanURL)
+            }
+
             throw CaptureError.engineFailed("engine.start() failed: \(error)")
         }
 
@@ -138,6 +173,13 @@ final class AudioCaptureService {
         engine?.stop()
 
         await flushSerialQueue()
+
+        // Neutralize the tap's file handle first. Any serial-queue block
+        // that squeezes through after removeTap + flush hits the `guard`
+        // on a nil `file` and no-ops — no rogue writes into a file we're
+        // about to finalize.
+        fileBox?.file = nil
+        fileBox = nil
 
         // Closing the AVAudioFile (via dropping the strong reference)
         // finalizes the RIFF header on disk.
@@ -196,6 +238,12 @@ final class AudioCaptureService {
         engine?.stop()
 
         await flushSerialQueue()
+
+        // Clear the tap's file reference so any straggling serial-queue
+        // block short-circuits before we remove the underlying WAV.
+        fileBox?.file = nil
+        fileBox = nil
+
         outputFile = nil
 
         if let url = currentFileURL {
@@ -212,94 +260,6 @@ final class AudioCaptureService {
         )
 
         state = .idle
-    }
-
-    // MARK: - Helpers
-
-    private func resolveInboxURL() throws -> URL {
-        guard let inboxURL = inboxURLProvider() else {
-            throw CaptureError.appGroupContainerMissing
-        }
-        try FileManager.default.createDirectory(
-            at: inboxURL,
-            withIntermediateDirectories: true
-        )
-        return inboxURL
-    }
-
-    private func activateSession() throws {
-        let session = AVAudioSession.sharedInstance()
-        do {
-            try session.setCategory(.record, mode: .measurement)
-            try session.setActive(true)
-        } catch {
-            logger.error("Audio session activation failed: \(error.localizedDescription)")
-            throw CaptureError.sessionActivationFailed
-        }
-    }
-
-    private func makeConverter(inputFormat: AVAudioFormat) throws -> AudioConverter {
-        do {
-            return try AudioConverter(inputFormat: inputFormat)
-        } catch {
-            throw CaptureError.engineFailed("converter init failed: \(error)")
-        }
-    }
-
-    private func openOutputFile(at url: URL, outputFormat: AVAudioFormat) throws -> AVAudioFile {
-        do {
-            return try AVAudioFile(
-                forWriting: url,
-                settings: outputFormat.settings,
-                commonFormat: .pcmFormatFloat32,
-                interleaved: false
-            )
-        } catch {
-            throw CaptureError.engineFailed("AVAudioFile open failed: \(error)")
-        }
-    }
-
-    private func installTap(
-        on inputNode: AVAudioInputNode,
-        inputFormat: AVAudioFormat,
-        converter: AudioConverter,
-        file: AVAudioFile
-    ) {
-        // Capture local references so the tap closure does not touch self.
-        let tapQueue = serialQueue
-        let tapConverter = converter
-        let tapContinuation = levelContinuation
-        let tapLogger = logger
-        // outputFile is captured via a box so cancel() can clear it and
-        // subsequent tap callbacks become no-ops.
-        let fileBox = AudioFileBox(file: file)
-
-        inputNode.installTap(
-            onBus: 0,
-            bufferSize: 1024,
-            format: inputFormat
-        ) { buffer, _ in
-            tapQueue.async {
-                guard let boxedFile = fileBox.file else { return }
-                guard let converted = try? tapConverter.convert(buffer) else { return }
-                do {
-                    try boxedFile.write(from: converted)
-                } catch {
-                    tapLogger.error("WAV write failed: \(error.localizedDescription)")
-                    return
-                }
-                let level = Self.rmsLevel(of: converted)
-                tapContinuation.yield(level)
-            }
-        }
-    }
-
-    private func flushSerialQueue() async {
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            serialQueue.async {
-                continuation.resume()
-            }
-        }
     }
 
     nonisolated static func rmsLevel(of buffer: AVAudioPCMBuffer) -> Float {
@@ -319,10 +279,106 @@ final class AudioCaptureService {
     }
 }
 
-/// Small reference box so the tap closure can read the in-flight AVAudioFile
-/// without a strong capture of the capture service itself. `cancel()` clears
-/// `file` to make subsequent tap ticks no-ops.
-private final class AudioFileBox: @unchecked Sendable {
+// MARK: - Setup helpers
+
+extension AudioCaptureService {
+
+    fileprivate func resolveInboxURL() throws -> URL {
+        guard let inboxURL = inboxURLProvider() else {
+            throw CaptureError.appGroupContainerMissing
+        }
+        try FileManager.default.createDirectory(
+            at: inboxURL,
+            withIntermediateDirectories: true
+        )
+        return inboxURL
+    }
+
+    fileprivate func activateSession() throws {
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.setCategory(.record, mode: .measurement)
+            try session.setActive(true)
+        } catch {
+            logger.error("Audio session activation failed: \(error.localizedDescription)")
+            throw CaptureError.sessionActivationFailed
+        }
+    }
+
+    fileprivate func makeConverter(inputFormat: AVAudioFormat) throws -> AudioConverter {
+        do {
+            return try AudioConverter(inputFormat: inputFormat)
+        } catch {
+            throw CaptureError.engineFailed("converter init failed: \(error)")
+        }
+    }
+
+    fileprivate func openOutputFile(at url: URL, outputFormat: AVAudioFormat) throws -> AVAudioFile {
+        do {
+            return try AVAudioFile(
+                forWriting: url,
+                settings: outputFormat.settings,
+                commonFormat: .pcmFormatFloat32,
+                interleaved: false
+            )
+        } catch {
+            throw CaptureError.engineFailed("AVAudioFile open failed: \(error)")
+        }
+    }
+
+    fileprivate func installTap(
+        on inputNode: AVAudioInputNode,
+        inputFormat: AVAudioFormat,
+        converter: AudioConverter,
+        file: AVAudioFile
+    ) {
+        // Capture local references so the tap closure does not touch self.
+        let tapQueue = serialQueue
+        let tapConverter = converter
+        let tapContinuation = levelContinuation
+        let tapLogger = logger
+        // The AVAudioFile is captured by the tap via a reference box. The
+        // class also holds the box (self.fileBox) so stop() / cancel() can
+        // clear `file` before any in-flight serial-queue block runs —
+        // those blocks then short-circuit on the nil guard and no-op.
+        let box = AudioFileBox(file: file)
+        self.fileBox = box
+
+        inputNode.installTap(
+            onBus: 0,
+            bufferSize: 1024,
+            format: inputFormat
+        ) { buffer, _ in
+            tapQueue.async {
+                guard let boxedFile = box.file else { return }
+                guard let converted = try? tapConverter.convert(buffer) else { return }
+                do {
+                    try boxedFile.write(from: converted)
+                } catch {
+                    tapLogger.error("WAV write failed: \(error.localizedDescription)")
+                    return
+                }
+                let level = Self.rmsLevel(of: converted)
+                tapContinuation.yield(level)
+            }
+        }
+    }
+
+    fileprivate func flushSerialQueue() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            serialQueue.async {
+                continuation.resume()
+            }
+        }
+    }
+}
+
+/// Reference box so the tap closure can read the in-flight AVAudioFile
+/// without a strong capture of the capture service itself. The service
+/// also holds this box so `stop()` and `cancel()` can clear `file` before
+/// any pending serial-queue block runs — they then short-circuit on the
+/// nil `file` guard and become no-ops.
+final class AudioFileBox: @unchecked Sendable {
     var file: AVAudioFile?
     init(file: AVAudioFile) { self.file = file }
 }

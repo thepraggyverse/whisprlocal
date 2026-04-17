@@ -12,7 +12,7 @@ import UIKit
 struct RecordView: View {
 
     @State private var service = AudioCaptureService()
-    @State private var permissionStatus: RecordingPermissionStatus = .notDetermined
+    @State private var permissionGate: RecordPermissionGate
     @State private var levels: [Float] = Array(repeating: 0, count: WaveformView.barCount)
     @State private var lastWrittenURL: URL?
     @State private var errorMessage: String?
@@ -21,8 +21,11 @@ struct RecordView: View {
     @Environment(ModelStore.self) private var modelStore
     @Environment(TranscriptionStore.self) private var transcriptionStore
     @Environment(\.openURL) private var openURL
+    @Environment(\.scenePhase) private var scenePhase
 
-    private let permission: RecordingPermissionAuthority = AVRecordingPermissionAuthority()
+    init(permissionAuthority: RecordingPermissionAuthority = AVRecordingPermissionAuthority()) {
+        _permissionGate = State(initialValue: RecordPermissionGate(authority: permissionAuthority))
+    }
 
     var body: some View {
         VStack(spacing: 20) {
@@ -46,12 +49,19 @@ struct RecordView: View {
             transcriptArea
         }
         .padding()
-        .task(id: "permission-bootstrap") {
-            permissionStatus = permission.currentStatus
-        }
         .task(id: "level-stream") {
             for await level in service.levelStream {
                 pushLevel(level)
+            }
+        }
+        // Re-read the live system permission every time the scene returns
+        // to .active. Without this, a user who denied the mic, tapped
+        // "Open Settings", granted the mic in iOS Settings, and returned
+        // would stay stuck on the cached .denied status — beginRecording's
+        // guard would fail silently and lock them out indefinitely.
+        .onChange(of: scenePhase, initial: true) { _, newPhase in
+            if newPhase == .active {
+                permissionGate.refreshFromSystem()
             }
         }
     }
@@ -86,7 +96,7 @@ struct RecordView: View {
                 .font(.footnote)
                 .foregroundStyle(.red)
                 .multilineTextAlignment(.center)
-        } else if permissionStatus == .denied {
+        } else if permissionGate.status == .denied {
             deniedGuidance
         } else if !modelStore.isReadyForTranscription {
             modelNotReadyGuidance
@@ -191,15 +201,8 @@ struct RecordView: View {
     }
 
     private func beginRecording() async {
-        let currentPermission: RecordingPermissionStatus
-        if permissionStatus == .notDetermined {
-            currentPermission = await permission.request()
-            permissionStatus = currentPermission
-        } else {
-            currentPermission = permissionStatus
-        }
-
-        guard currentPermission == .granted else { return }
+        let resolved = await permissionGate.requestIfNeeded()
+        guard resolved == .granted else { return }
 
         do {
             try await service.start()

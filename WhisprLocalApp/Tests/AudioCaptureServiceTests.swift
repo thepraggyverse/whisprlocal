@@ -7,18 +7,12 @@ import WhisprShared
 final class AudioCaptureServiceTests: XCTestCase {
 
     func testInitialStateIsIdle() {
-        let service = AudioCaptureService(
-            permission: StubAuthority(currentStatus: .granted, toReturn: .granted),
-            inboxURLProvider: { nil }
-        )
+        let service = AudioCaptureService(inboxURLProvider: { nil })
         XCTAssertEqual(service.state, .idle)
     }
 
     func testStartFailsIfAppGroupMissing() async {
-        let service = AudioCaptureService(
-            permission: StubAuthority(currentStatus: .granted, toReturn: .granted),
-            inboxURLProvider: { nil }
-        )
+        let service = AudioCaptureService(inboxURLProvider: { nil })
         do {
             try await service.start()
             XCTFail("expected error")
@@ -30,10 +24,7 @@ final class AudioCaptureServiceTests: XCTestCase {
     }
 
     func testStopFromIdleThrowsInvalidState() async {
-        let service = AudioCaptureService(
-            permission: StubAuthority(currentStatus: .granted, toReturn: .granted),
-            inboxURLProvider: { nil }
-        )
+        let service = AudioCaptureService(inboxURLProvider: { nil })
         do {
             _ = try await service.stop()
             XCTFail("expected error")
@@ -46,6 +37,99 @@ final class AudioCaptureServiceTests: XCTestCase {
         } catch {
             XCTFail("unexpected error: \(error)")
         }
+    }
+
+    // MARK: - Bugbot #4 regression — fileBox is actually cleared
+
+    /// The installTap comment promised that `cancel()` and `stop()` clear
+    /// `fileBox.file` so any straggling tap callback becomes a no-op. Pre-
+    /// fix, `fileBox` was a local variable in `installTap` — nothing could
+    /// reach it. This test pins the contract: after a failed `start()`
+    /// (which is the only failure path our unit test can reliably drive
+    /// through `installTap`), the service's fileBox is nil.
+    func testFileBoxIsClearedAfterStartFailure() async throws {
+        let tempInbox = try makeTempInbox()
+        defer { try? FileManager.default.removeItem(at: tempInbox) }
+
+        struct SimulatedEngineStartFailure: Error {}
+
+        let service = AudioCaptureService(
+            inboxURLProvider: { tempInbox },
+            engineStarter: { _ in throw SimulatedEngineStartFailure() }
+        )
+
+        do {
+            try await service.start()
+            XCTFail("expected engineStarter to throw")
+        } catch is AudioCaptureService.CaptureError {
+            // Expected.
+        } catch {
+            throw XCTSkip("skipping — start() bailed before engineStarter: \(error)")
+        }
+
+        let snapshot = service.stateSnapshotForTests
+        XCTAssertFalse(
+            snapshot.hasFileBox,
+            "fileBox reference must be cleared — otherwise the installTap comment's claim that cancel/stop neutralize the tap's write path is a lie."
+        )
+    }
+
+    // MARK: - Bugbot #2 regression — start() failure cleanup
+
+    func testStartFailureClearsStateAndDeletesOrphanWAV() async throws {
+        let tempInbox = try makeTempInbox()
+        defer { try? FileManager.default.removeItem(at: tempInbox) }
+
+        struct SimulatedEngineStartFailure: Error {}
+
+        let service = AudioCaptureService(
+            inboxURLProvider: { tempInbox },
+            engineStarter: { _ in throw SimulatedEngineStartFailure() }
+        )
+
+        // Pre-condition: inbox is empty.
+        let before = try FileManager.default.contentsOfDirectory(at: tempInbox, includingPropertiesForKeys: nil)
+        XCTAssertTrue(before.isEmpty, "inbox should start empty")
+
+        do {
+            try await service.start()
+            XCTFail("expected engineStarter to surface a failure")
+        } catch is AudioCaptureService.CaptureError {
+            // Expected: start() wraps the injected failure in .engineFailed.
+        } catch {
+            // Allowed: earlier-path failure (e.g. .sessionActivationFailed)
+            // on a simulator without a mic. Only the wrapped
+            // engineStarter path asserts the cleanup contract; bail out if
+            // we never reached it.
+            throw XCTSkip("skipping — start() bailed before engineStarter: \(error)")
+        }
+
+        // State must be fully reset — no leaked engine, converter, or
+        // partially-open WAV on retry.
+        let snapshot = service.stateSnapshotForTests
+        XCTAssertEqual(snapshot.state, .idle)
+        XCTAssertFalse(snapshot.hasEngine, "engine reference leaked after failure")
+        XCTAssertFalse(snapshot.hasConverter, "converter reference leaked after failure")
+        XCTAssertFalse(snapshot.hasOutputFile, "outputFile reference leaked after failure")
+        XCTAssertNil(snapshot.currentFileURL, "currentFileURL leaked after failure")
+        // Bugbot #4 cross-check: the tap file-box must be cleared too so
+        // any straggling serial-queue block short-circuits instead of
+        // writing into a neutralized WAV.
+        XCTAssertFalse(snapshot.hasFileBox, "fileBox reference leaked after failure")
+
+        // And the zero-byte orphan WAV on disk must be gone — otherwise
+        // every retry grows the App Group inbox and the InboxJobWatcher
+        // would later try to transcribe an empty file.
+        let after = try FileManager.default.contentsOfDirectory(at: tempInbox, includingPropertiesForKeys: nil)
+        let wavFiles = after.filter { $0.pathExtension == "wav" }
+        XCTAssertTrue(wavFiles.isEmpty, "orphan WAV not cleaned up: \(wavFiles.map { $0.lastPathComponent })")
+    }
+
+    private func makeTempInbox() throws -> URL {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("whispr-capture-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
     }
 
     func testRMSOfConstantBufferMatchesExpected() {
@@ -153,14 +237,6 @@ final class AudioCaptureServiceTests: XCTestCase {
             XCTAssertEqual(stem, "not-a-uuid")
         }
         XCTAssertTrue(center.postedNames.isEmpty, "should not post on failure")
-    }
-
-    // MARK: - Stub
-
-    private struct StubAuthority: RecordingPermissionAuthority {
-        let currentStatus: RecordingPermissionStatus
-        let toReturn: RecordingPermissionStatus
-        func request() async -> RecordingPermissionStatus { toReturn }
     }
 }
 
