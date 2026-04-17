@@ -54,7 +54,7 @@ xcodebuild -scheme WhisprKeyboard \
 
 # Run unit tests (main app + Shared package)
 xcodebuild test -scheme WhisprLocalApp \
-  -destination 'platform=iOS Simulator,OS=latest,name=iPhone 16 Pro'
+  -destination 'platform=iOS Simulator,OS=latest,name=iPhone 17 Pro'
 
 # Lint
 swiftlint --strict

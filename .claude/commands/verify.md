@@ -24,7 +24,7 @@ Execute in this order, stopping on first failure:
 4. **Run unit tests:**
    ```bash
    xcodebuild test -scheme WhisprLocalApp \
-     -destination 'platform=iOS Simulator,OS=latest,name=iPhone 16 Pro' 2>&1 | tail -80
+     -destination 'platform=iOS Simulator,OS=latest,name=iPhone 17 Pro' 2>&1 | tail -80
    ```
 
 5. **Run Shared package tests:**
