@@ -29,7 +29,10 @@ jobs:
 
       - name: Install toolchain via Mint
         run: |
-          brew install mint
+          # ripgrep is not preinstalled on macos-15 runners but the Privacy
+          # pattern audit step relies on `rg`. Install alongside Mint so both
+          # CI and local dev use the same tool surface.
+          brew install mint ripgrep
           mint bootstrap
 
       - name: Generate Xcode project
