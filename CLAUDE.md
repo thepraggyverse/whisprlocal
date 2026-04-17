@@ -111,7 +111,7 @@ standalone `scripts/audit-privacy.sh` — one source of truth.
 
 | ID | Scope | Status |
 |---|---|---|
-| M0 | Project skeleton, targets, entitlements, CI | In progress |
+| M0 | Project skeleton, targets, entitlements, CI | Shipped (`v0.1.0-m0`) |
 | M1 | Audio capture in main app (AVAudioEngine → 16kHz Float32 WAV) | — |
 | M2 | WhisperKit integration, model catalog, first transcription | — |
 | M3 | MLX Swift polish, prompt templates, raw/polished toggle | — |
