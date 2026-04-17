@@ -9,11 +9,17 @@ options:
   generateEmptyDirectories: true
   groupSortPosition: top
 
-# SwiftPM packages — local only at M0. WhisperKit lands at M2, MLX strategy
-# resolved at M3. See docs/DECISIONS.md ADR-001.
+# SwiftPM packages — WhisperKit lands in M2 (ADR-002). MLX strategy resolved
+# at M3 (ADR-001). The argmax-oss-swift package is the canonical home of
+# WhisperKit after upstream's March 2026 multi-kit reorg; we depend on the
+# WhisperKit product only (not the ArgmaxOSS umbrella, not TTSKit/SpeakerKit)
+# to keep the binary lean and avoid unrelated open issues.
 packages:
   WhisprShared:
     path: Shared
+  ArgmaxOSS:
+    url: https://github.com/argmaxinc/argmax-oss-swift
+    exactVersion: 0.18.0
 
 # Project-wide build settings. Per-target overrides below.
 settings:
@@ -57,6 +63,8 @@ targets:
     dependencies:
       - package: WhisprShared
         product: WhisprShared
+      - package: ArgmaxOSS
+        product: WhisperKit
       - target: WhisprKeyboard
         embed: true
     info:

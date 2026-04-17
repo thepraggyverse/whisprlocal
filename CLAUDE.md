@@ -116,7 +116,7 @@ standalone `scripts/audit-privacy.sh` — one source of truth.
 |---|---|---|
 | M0 | Project skeleton, targets, entitlements, CI | Shipped (`v0.1.0-m0`) |
 | M1 | Audio capture in main app (AVAudioEngine → 16kHz Float32 WAV) | Shipped (branch `milestone/M1-audio`, tag on merge) |
-| M2 | WhisperKit integration, model catalog, first transcription | — |
+| M2 | WhisperKit integration, model catalog, first transcription | Shipped (branch `milestone/M2-whisperkit`, tag on merge) |
 | M3 | MLX Swift polish, prompt templates, raw/polished toggle | — |
 | M4 | Keyboard extension, App Group hand-off, Darwin notifications | — |
 | M5 | Command Mode, Dictionary, Snippets | — |

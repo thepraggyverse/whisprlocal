@@ -52,3 +52,39 @@ supported via larger model variants (`whisper-small`, `whisper-large-v3-turbo`).
 
 Forthcoming at M7. The intent is a single checklist per device/OS cell,
 manual execution with screenshots, results committed to this document.
+
+## Opt-in integration tests
+
+Some tests in `WhisprLocalApp/Tests/` download real weights and run real
+Core ML inference. They are **skipped in default CI** because they need
+network (a ~40 MB download on first run), a warm Core ML cache, and a
+real iOS Simulator device. Run them manually when you want to verify the
+ADR-002 mitigations against real weights, or before shipping a milestone
+that touched `WhisperEngine`.
+
+### `WhisperEngineIntegrationTests` — M2
+
+Gated behind the `WHISPR_INTEGRATION` Swift compilation condition.
+Runs the tiny English Whisper variant (`openai_whisper-tiny.en`)
+against a procedurally-generated 2 s silent WAV that matches the M1
+capture format (16 kHz Float32 mono). Also asserts the download→load
+path contract (`MelSpectrogram.mlmodelc` exists in the resolved
+folder) before running transcribe. Does not assert a transcript string —
+absence of crash on iOS 26 + non-empty `TranscriptionOutcome` is the
+contract.
+
+```bash
+xcodebuild test \
+  -scheme WhisprLocalApp \
+  -destination 'platform=iOS Simulator,OS=latest,name=iPhone 17 Pro' \
+  -only-testing:WhisprLocalAppTests/WhisperEngineIntegrationTests \
+  OTHER_SWIFT_FLAGS='$(inherited) -D WHISPR_INTEGRATION'
+```
+
+We use a compilation condition, not an env var — `xcodebuild test`
+does not propagate shell env vars to the iOS Simulator test-runner
+process, so env-var gates silently skip even when the user sets them.
+
+A real CC-licensed speech fixture (so the test can also assert a
+transcript string contains something) lands in M7 hardening per
+spec §10.

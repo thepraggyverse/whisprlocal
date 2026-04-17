@@ -85,7 +85,7 @@ Document this flow in `docs/ARCHITECTURE.md` as the first deliverable.
 - **Min iOS:** 17.0
 - **Recommended device:** iPhone 12 / A14 or later (8 GB RAM preferred)
 - **Build system:** Xcode 16+, Swift Package Manager for all dependencies
-- **ASR:** [WhisperKit](https://github.com/argmaxinc/WhisperKit) (MIT, on-device, CoreML-compiled Whisper variants)
+- **ASR:** [WhisperKit](https://github.com/argmaxinc/argmax-oss-swift) (MIT, on-device, CoreML-compiled Whisper variants). Canonical repo is `argmax-oss-swift` after the March 2026 multi-kit reorg; we depend on the `WhisperKit` product only. See `docs/DECISIONS.md` ADR-002.
 - **LLM:** [MLX Swift Examples / mlx-swift-examples](https://github.com/ml-explore/mlx-swift-examples) (MIT) — runs Qwen, Gemma, Llama, Phi families
 - **Fallback LLM backend (optional, behind a feature flag):** [LocalLLMClient](https://github.com/tattn/LocalLLMClient) which wraps llama.cpp + MLX
 - **Audio:** AVAudioEngine + AVAudioConverter

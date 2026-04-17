@@ -52,6 +52,8 @@ final class AudioCaptureService {
 
     private let permission: RecordingPermissionAuthority
     private let inboxURLProvider: @Sendable () -> URL?
+    private let notificationCenter: DarwinNotificationCenter
+    private let sourceBundleIdProvider: @Sendable () -> String?
     private let logger = Logger(subsystem: "com.praggy.whisprlocal.app", category: "AudioCapture")
 
     private var engine: AVAudioEngine?
@@ -65,10 +67,14 @@ final class AudioCaptureService {
 
     init(
         permission: RecordingPermissionAuthority = AVRecordingPermissionAuthority(),
-        inboxURLProvider: @escaping @Sendable () -> URL? = { AppGroupPaths.inboxURL }
+        inboxURLProvider: @escaping @Sendable () -> URL? = { AppGroupPaths.inboxURL },
+        notificationCenter: DarwinNotificationCenter = SystemDarwinNotificationCenter(),
+        sourceBundleIdProvider: @escaping @Sendable () -> String? = { Bundle.main.bundleIdentifier }
     ) {
         self.permission = permission
         self.inboxURLProvider = inboxURLProvider
+        self.notificationCenter = notificationCenter
+        self.sourceBundleIdProvider = sourceBundleIdProvider
         let (stream, continuation) = AsyncStream.makeStream(of: Float.self)
         self.levelStream = stream
         self.levelContinuation = continuation
@@ -149,6 +155,22 @@ final class AudioCaptureService {
             )
         } catch {
             logger.error("Setting file protection failed: \(error.localizedDescription)")
+        }
+
+        // IPC handoff: write {uuid}.json envelope alongside the WAV and post
+        // DarwinNotificationNames.jobQueued so the InboxJobWatcher picks up
+        // the pair. Failures here are logged but do not fail stop() — the
+        // WAV is still valid and a later scan will catch the orphan.
+        do {
+            try JobHandoff.writeEnvelopeAndPostJobQueued(
+                forWAV: url,
+                createdAt: Date(),
+                sourceBundleId: sourceBundleIdProvider(),
+                pipeline: "default",
+                notificationCenter: notificationCenter
+            )
+        } catch {
+            logger.error("Job handoff failed: \(error.localizedDescription)")
         }
 
         engine = nil

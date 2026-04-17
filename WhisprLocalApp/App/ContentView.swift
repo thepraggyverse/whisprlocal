@@ -1,14 +1,26 @@
 import SwiftUI
 
-/// App-level root view. Currently renders the M1 record screen directly;
-/// M2 will introduce a tab bar (record / history / settings) and this view
-/// is the natural home for that shell.
+/// App shell. Hosts the two tabs M2 ships with: Record (the M1 screen,
+/// extended to show transcripts) and Settings (model picker). M6 pulls
+/// History into a third tab.
 struct ContentView: View {
     var body: some View {
-        RecordView()
+        TabView {
+            RecordView()
+                .tabItem {
+                    Label("Record", systemImage: "mic.fill")
+                }
+
+            SettingsView()
+                .tabItem {
+                    Label("Settings", systemImage: "gearshape.fill")
+                }
+        }
     }
 }
 
 #Preview {
     ContentView()
+        .environment(PreviewFixtures.modelStore)
+        .environment(PreviewFixtures.transcriptionStore)
 }

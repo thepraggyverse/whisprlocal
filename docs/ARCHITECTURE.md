@@ -167,3 +167,147 @@ AVAudioFile.write(from:)  ← streaming, one tap buffer at a time
   this is intentional and documented.
 - No network code added. No telemetry. Session category is `.record`
   with mode `.measurement` — no audio playback path.
+
+## M2: Transcription pipeline (main app)
+
+M2 closes the loop from M1's WAV into a visible transcript, and it does
+so through the same inbox/envelope/Darwin-notification contract that M4
+uses from the keyboard extension. There is **no "fast path" from
+AudioCaptureService directly to WhisperEngine** — every transcription
+goes through the inbox. This pays upfront architectural cost so M4's
+keyboard wiring is a drop-in.
+
+```
+            ┌─ stop() ─┐
+AudioCaptureService ──▶ inbox/{uuid}.wav          (16 kHz Float32 mono, file-protection complete)
+                   └──▶ inbox/{uuid}.json         (JobEnvelope: jobId, createdAt, sourceBundleId, pipeline)
+                   └──▶ post "com.praggy.whisprlocal.job.queued"  (Darwin notification)
+                                                  │
+                                                  │ (dispatch to .userInitiated)
+                                                  ▼
+                                          InboxJobWatcher
+                                          ├─ re-enumerate inbox/ (idempotent — see R8 in M2 plan)
+                                          ├─ pair WAV+JSON by stem
+                                          └─ per pair, if not in-flight:
+                                                │
+                                                ▼
+                                          WhisperEngine (actor)
+                                          ├─ load WhisperKit(variant, modelFolder) lazily
+                                          │   - DecodingOptions(supressTokens: [])  ← #392
+                                          │   - WhisperKitConfig(prewarm: false)    ← #315
+                                          │   - modelFolder under Application Support
+                                          └─ transcribe(audioPath:) → TranscriptionResult
+                                                │
+                                                ▼
+                                          TranscriptionOutcome
+                                                │
+                                                ▼
+                                          TranscriptionStore (@Observable, capped at 100)
+                                                │
+                                                ▼
+                                          RecordView.transcriptArea (SwiftUI render)
+                                                │
+                                                ├─ delete inbox/{uuid}.wav   ◀─ §8.6 cleanup
+                                                └─ delete inbox/{uuid}.json     (on success or failure)
+```
+
+### Model download flow
+
+```
+Settings → Model picker → Download tap
+  │
+  ▼
+ModelStore.download(entry) → ModelDownloading (protocol seam)
+  │
+  ▼
+ModelDownloadService (actor)
+  │
+  ▼
+WhisperKit.download(variant:downloadBase:progressCallback:)
+  │
+  ▼
+huggingface.co / cdn-lfs.huggingface.co   ← only outbound network in the app
+  │
+  ▼
+Application Support/Models/<HubApi-structured tree>
+```
+
+Weights live in `Application Support/Models/` — **not** the App Group
+container, because the keyboard never loads model weights. Application
+Support is excluded from iCloud backup by default and hidden from the
+user-visible Files app (R6 in the M2 plan).
+
+### Download path vs load path — the URL WhisperKit wants differs
+
+WhisperKit v0.18 uses two different URL semantics for the same model:
+
+- **Download** (`WhisperKit.download(variant:downloadBase:)`): HubApi
+  materializes a nested tree `<downloadBase>/models/<repo>/<variant>/…`
+  and returns the *deep* folder URL as its result. `downloadBase` is a
+  cache root, not the final location.
+- **Load** (`WhisperKitConfig.modelFolder`): expects the *deep* folder
+  URL that contains `MelSpectrogram.mlmodelc` (and friends) directly.
+  No further nesting.
+
+Passing `downloadBase` where `modelFolder` is expected — or vice versa —
+throws `WhisperError.modelsUnavailable("Model file not found at
+…/MelSpectrogram.mlmodelc")` at load time. M2's sim verification
+caught exactly this regression; the fix was to thread the deep URL
+from the service to the engine via a resolver closure:
+
+```
+WhisperEngine.init(catalog:, modelFolderProvider:)
+                                      │
+                                      ▼
+           ModelDownloadService.resolvedFolderURL(for entry:)
+                                      │
+                                      ▼
+                            deep URL → WhisperKitConfig.modelFolder
+```
+
+`WhisperEngineMitigationsTests.testEngineRejectsUnDownloadedModel` is
+the unit-level regression guard; the opt-in integration test exercises
+the real download→resolve→load round-trip with a real model.
+
+### Service graph (main app)
+
+Everything above is wired in `WhisprLocalApp/Core/DI/AppServices.swift`,
+instantiated by `@main` and injected into the SwiftUI tree via
+`.environment(…)`:
+
+| Service | Role | Isolation |
+|---|---|---|
+| `ModelCatalog` | Static data from bundled JSON | value type |
+| `ModelDownloadService` | WhisperKit download wrapper | `actor` |
+| `ModelStore` | Selected model + download state | `@Observable @MainActor` |
+| `WhisperEngine` | WhisperKit transcribe wrapper | `actor` |
+| `TranscriptionStore` | Outcome log | `@Observable @MainActor` |
+| `InboxJobWatcher` | Darwin observer + cleanup | `@MainActor` |
+
+### ADR-002 mitigations in the code
+
+Three upstream-bug workarounds are pinned to call sites. Grep for the
+issue IDs to audit them:
+
+- `argmax-oss-swift#392` — `DecodingOptions(supressTokens: [])` in
+  `WhisperEngine.makeDecodingOptions()`. Asserted by
+  `WhisperEngineMitigationsTests`.
+- `argmax-oss-swift#315` — `prewarm: false` + no `prewarmModels()` call
+  in `WhisperEngine.makeConfig(for:modelFolderURL:)`. Asserted by the
+  same test suite. Swift 5.10 language mode is locked in `project.yml`.
+- `argmax-oss-swift#408` — SwiftPM dependency-scan warnings on
+  Xcode 26.2. Accepted as build-log noise; CI uses Xcode 16 so this is
+  a local-dev-only observation.
+
+### Privacy invariants (M2)
+
+- Only new outbound network: user-initiated model download to the
+  ATS-allow-listed HuggingFace domains. No other remote added.
+- Weights persist in `Application Support/Models/`; audio stays
+  transient in App Group `inbox/` and is deleted by the watcher
+  after transcription (§8.6) **even on failure** — leaking failed-WAV
+  audio would violate the privacy contract more severely than losing
+  a retry.
+- No analytics, no crash reporting SDKs added. `CI`'s privacy pattern
+  audit covers cloud AI imports, analytics SDKs, and keyboard ML
+  imports; all pass.

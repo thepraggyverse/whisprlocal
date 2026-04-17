@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "models": [
+    {
+      "id": "whisper-tiny-en",
+      "displayName": "Whisper Tiny (English)",
+      "variantName": "openai_whisper-tiny.en",
+      "huggingFaceRepo": "argmaxinc/whisperkit-coreml",
+      "sizeBytes": 40000000,
+      "sha256": null,
+      "language": "en",
+      "minDeviceRAMBytes": 0,
+      "minIOSVersion": "17.0",
+      "recommendedUse": "stt",
+      "license": "MIT",
+      "isDefault": false,
+      "note": "Fastest, English-only. Good for quick tests and low-RAM devices."
+    },
+    {
+      "id": "whisper-base",
+      "displayName": "Whisper Base",
+      "variantName": "openai_whisper-base",
+      "huggingFaceRepo": "argmaxinc/whisperkit-coreml",
+      "sizeBytes": 75000000,
+      "sha256": null,
+      "language": "multilingual",
+      "minDeviceRAMBytes": 0,
+      "minIOSVersion": "17.0",
+      "recommendedUse": "stt",
+      "license": "MIT",
+      "isDefault": true,
+      "note": "Default. Good for mixed-language users (Hindi, Marathi, English)."
+    },
+    {
+      "id": "whisper-small",
+      "displayName": "Whisper Small",
+      "variantName": "openai_whisper-small",
+      "huggingFaceRepo": "argmaxinc/whisperkit-coreml",
+      "sizeBytes": 250000000,
+      "sha256": null,
+      "language": "multilingual",
+      "minDeviceRAMBytes": 4000000000,
+      "minIOSVersion": "17.0",
+      "recommendedUse": "stt",
+      "license": "MIT",
+      "isDefault": false,
+      "note": "Higher accuracy; 100+ languages. Needs A15+ hardware."
+    },
+    {
+      "id": "whisper-large-v3-turbo",
+      "displayName": "Whisper Large v3 Turbo",
+      "variantName": "openai_whisper-large-v3-v20240930_turbo_632MB",
+      "huggingFaceRepo": "argmaxinc/whisperkit-coreml",
+      "sizeBytes": 632000000,
+      "sha256": null,
+      "language": "multilingual",
+      "minDeviceRAMBytes": 8000000000,
+      "minIOSVersion": "17.0",
+      "recommendedUse": "stt",
+      "license": "MIT",
+      "isDefault": false,
+      "note": "Best accuracy. Recommended on iPhone 15 Pro+ (8 GB RAM)."
+    }
+  ]
+}

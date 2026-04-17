@@ -94,3 +94,109 @@ dedicated research into:
   deliberately at M3.
 - *Pin MLX by vendoring Libraries/MLXLLM source directly* — rejected
   for M0 scope. Revisit at M3.
+
+---
+
+## ADR-002: Pin WhisperKit via argmax-oss-swift @ 0.18.0, product WhisperKit only
+
+**Status:** Accepted (2026-04-17)
+
+**Context**
+
+`PROJECT_SPEC.md` §3 originally pointed at `github.com/argmaxinc/WhisperKit`.
+During M2 discovery we confirmed that Argmax renamed and restructured the
+package in March 2026: the canonical repo is now
+`github.com/argmaxinc/argmax-oss-swift`, and what was once a single
+`WhisperKit` package is now a multi-kit umbrella exposing four separate
+library products — `WhisperKit`, `TTSKit`, `SpeakerKit`, and the
+all-in-one `ArgmaxOSS`. The old URL still redirects, but the package name
+resolved by SPM is `argmax-oss-swift`, not `WhisperKit`. ADR-001 deferred
+this pin decision to M2 precisely so we could make it against the current
+state of upstream rather than at the spec-writing time.
+
+Discovery also confirmed two open upstream issues that affect our target
+runtime, both documented in ADR-001 and re-verified in M2:
+
+- `#392` — `SuppressTokensFilter` writes to a read-only `MLMultiArray` on
+  iOS 26 when `suppressTokens` includes `-1`. Still open.
+- `#315` — Swift 6 crash during `prewarmModels()`. Still open.
+- `#408` — SwiftPM dependency-scan warnings on Xcode 26.2
+  (`WhisperKit missing dependency on Tokenizers/Hub/...`). Warnings only,
+  no runtime impact. Documented here so future triage doesn't treat the
+  noise as a regression.
+
+**Decision**
+
+1. Declare the package as `ArgmaxOSS` in `project.yml` with URL
+   `https://github.com/argmaxinc/argmax-oss-swift` and
+   `exactVersion: 0.18.0`. We pin exact, not `upToNextMinor`, because
+   minor bumps in this package have introduced API shifts (v0.15
+   `TranscriptionResult` struct → class) and structural target
+   additions (v0.17/0.18 SpeakerKit + ModelManager refactor). Every
+   bump gets a deliberate, reviewed PR.
+2. Depend on the `WhisperKit` product only — **not** the `ArgmaxOSS`
+   umbrella, **not** `TTSKit`, **not** `SpeakerKit`. We don't ship
+   text-to-speech or speaker diarization, so linking those products
+   only adds binary size and open-issue exposure.
+3. Use the canonical `argmax-oss-swift` URL explicitly. The old URL's
+   redirect is reliable today but is an implementation detail we
+   shouldn't depend on; future SwiftPM resolver changes could surface
+   the redirect as a warning or failure.
+4. Update `PROJECT_SPEC.md` §3 to reflect the canonical URL.
+
+**Consequences**
+
+- Smaller binary and tighter dependency graph: no TTSKit / SpeakerKit
+  transitive Core ML baggage. The Core ML framework links implicitly
+  through WhisperKit itself, not through the umbrella.
+- Version bumps are intentional events, not resolver side-effects. A
+  future `v0.19.0` arrives as a PR titled "bump WhisperKit" with a
+  discovery pass on its release notes, not silently.
+- The known-issue mitigations (ADR-001 → ADR-002 continuity) land at the
+  call sites they affect rather than as build-level patches. In-code
+  references:
+    - `WhisprLocalApp/Features/Transcription/WhisperEngine.swift` always
+      constructs `DecodingOptions(suppressTokens: [])` and carries an
+      inline comment linking to `argmax-oss-swift#392`.
+    - `WhisperEngine` never calls `prewarmModels()`; lazy-load on first
+      `transcribe()` is the intended path. Inline comment links to
+      `argmax-oss-swift#315`.
+    - `project.yml` sets `SWIFT_VERSION: "5.10"` — not defaulted — so the
+      `#315` mitigation survives any future Xcode default change.
+- CI noise: on Xcode 26.2 we'll see SwiftPM dependency-scan warnings
+  from `#408`. Warnings only. Do not treat as errors. Our CI currently
+  runs Xcode 16, so the warnings are local-dev-only today.
+- Future `prompt`-field injection (our Dictionary feature in M5) passes
+  through `DecodingOptions.prompt`, which is unrelated to
+  `suppressTokens` and unaffected by `#392`.
+
+**Revisit when**
+
+- A new minor version lands (v0.19+). Re-run the M2-style discovery
+  (release notes, open-issue scan for our target OSes) and bump
+  deliberately.
+- Either `#392` or `#315` closes — re-evaluate the corresponding
+  mitigation. The `suppressTokens: []` workaround has no downside for
+  our use case (we don't need the WhisperKit default suppression token
+  set), but `prewarmModels()` would reduce cold-start latency by 1–2s
+  if we could call it safely.
+- Product scope grows to include text-to-speech (promote `TTSKit`
+  product) or speaker diarization (promote `SpeakerKit`). Either
+  requires its own ADR because both bring non-trivial transitive deps
+  and their own open-issue surface.
+- A future Xcode release makes `#408` warnings fail the build — pin the
+  Xcode version in CI or add explicit target dependencies if upstream
+  hasn't fixed it.
+
+**Alternatives considered**
+
+- *Use the `ArgmaxOSS` umbrella product* — rejected. Pulls in TTSKit
+  and SpeakerKit, neither of which we ship. Adds binary weight and
+  open-issue exposure with no benefit.
+- *Pin `.upToNextMinor(from: "0.18.0")`* — rejected. Upstream's recent
+  minor bumps are not SemVer-pure (struct → class API change in v0.15;
+  new top-level targets in v0.17/0.18). Exact pinning forces every bump
+  through review.
+- *Keep the old `argmaxinc/WhisperKit` URL and rely on the redirect* —
+  rejected. The redirect works today but depending on it is fragile.
+  Canonical name is cheap correctness.
