@@ -89,6 +89,7 @@ standalone `scripts/audit-privacy.sh` — one source of truth.
 
 - **Do not add cloud fallbacks.** No OpenAI, Anthropic, Google Cloud, Azure. Not even "optional." This is the product's moat.
 - **Do not load ML models in the keyboard extension.** A `WhisperKit` or `MLX` import in `WhisprKeyboard/` is a bug.
+- **Do not use xcodegen's `entitlements:` key without inline `properties:`.** It silently clobbers hand-written entitlements files. Use the `CODE_SIGN_ENTITLEMENTS` build setting to reference them instead (see current `project.yml` for the pattern).
 - **Do not add analytics SDKs.** No Mixpanel, no Segment, no Firebase, no Sentry, no Amplitude, no PostHog. Use `OSLog` + Xcode Organizer for diagnostics.
 - **Do not persist audio.** WAV files in `inbox/` delete after transcription. Polished text in `outbox/` deletes within 60s of insertion.
 - **Do not commit model weights.** No `.gguf`, `.safetensors`, `.mlmodelc`, or `.mlpackage` files in git — ever. Weights download at runtime to the app container.
@@ -106,13 +107,14 @@ standalone `scripts/audit-privacy.sh` — one source of truth.
 5. **Run `/verify`** after every logical chunk. Do not move forward on a red build.
 6. **Run `/audit-privacy`** at the end of every milestone.
 7. **Run `/memory-check`** if you touched anything in `WhisprKeyboard/`.
+8. **Verify CLI tools exist on the CI runner** before adding a workflow step that calls them. Check the `macos-15` image manifest at `github.com/actions/runner-images` rather than assuming availability — for example, `ripgrep` is not preinstalled and must be `brew install`ed in the workflow.
 
 ## Milestones
 
 | ID | Scope | Status |
 |---|---|---|
 | M0 | Project skeleton, targets, entitlements, CI | Shipped (`v0.1.0-m0`) |
-| M1 | Audio capture in main app (AVAudioEngine → 16kHz Float32 WAV) | — |
+| M1 | Audio capture in main app (AVAudioEngine → 16kHz Float32 WAV) | Shipped (branch `milestone/M1-audio`, tag on merge) |
 | M2 | WhisperKit integration, model catalog, first transcription | — |
 | M3 | MLX Swift polish, prompt templates, raw/polished toggle | — |
 | M4 | Keyboard extension, App Group hand-off, Darwin notifications | — |

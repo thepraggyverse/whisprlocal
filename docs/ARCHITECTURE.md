@@ -118,3 +118,52 @@ extension, the OS kills the process at launch.
 
 For deeper rationale on the architectural trade-offs, see
 `PROJECT_SPEC.md` §2 and the decisions in `docs/DECISIONS.md`.
+
+## M1: Audio capture pipeline (main app)
+
+M1 fills in the `UI` and (partially) the `MIC` boxes above, but with a
+caveat: **at M1 the main app also captures**, because the keyboard
+extension isn't wired up until M4. The spec explicitly puts M1's capture
+path in the main app (§11). The keyboard reuses the same canonical format
+at M4 — `Shared/Sources/WhisprShared/AudioFormat.swift` stays the single
+source of truth for both.
+
+```
+AVAudioEngine.inputNode tap (device-native rate, often 48 kHz stereo)
+  │
+  ▼
+AudioConverter (AVAudioConverter)
+  │  → 16 kHz mono Float32
+  ▼
+AVAudioFile.write(from:)  ← streaming, one tap buffer at a time
+  │
+  ▼
+{App Group}/inbox/{uuid}.wav  (NSFileProtectionComplete)
+```
+
+### Threading
+
+- The engine tap closure runs on the real-time audio I/O thread. Inside
+  it we only capture immutable `let`-bindings (converter, file box,
+  continuation) and dispatch the conversion + file write onto a serial
+  `DispatchQueue(qos: .userInitiated)` labelled `…whisprlocal.capture`.
+- `AudioCaptureService` is `@Observable @MainActor`; its published `state`
+  drives the SwiftUI record screen. `stop()` and `cancel()` await a
+  `flushSerialQueue()` before tearing down so no in-flight buffer writes
+  race with the file close.
+- Level metering uses per-buffer RMS, scaled ×4 and clamped to 0…1, pushed
+  into an `AsyncStream<Float>`. The waveform view maintains a fixed-size
+  ring of 24 values.
+
+### Privacy invariants (M1)
+
+- Every written WAV has `FileProtectionType.complete` set.
+- `inbox/` is created only if `AppGroupPaths.containerURL` resolves (so
+  unit tests without entitlements fail fast rather than silently writing
+  to a wrong location).
+- **Delete-after-consume is a M2 responsibility** (the WhisperEngine
+  deletes the WAV once transcription completes — see `PROJECT_SPEC.md`
+  §8.6). M1 ends with WAVs persisting in `inbox/` until M2 consumes them;
+  this is intentional and documented.
+- No network code added. No telemetry. Session category is `.record`
+  with mode `.measurement` — no audio playback path.
