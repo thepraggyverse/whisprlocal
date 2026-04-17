@@ -1,12 +1,13 @@
 import SwiftUI
 import UIKit
 
-/// M1 record screen. Composes permission flow + AudioCaptureService +
-/// WaveformView + RecordButton.
+/// Record screen. Composes permission flow + `AudioCaptureService` +
+/// `WaveformView` + `RecordButton`, and — at M2 — the transcript surface
+/// sourced from `TranscriptionStore`.
 ///
 /// The brand badge ("100% on-device") lives in the header here per
-/// PROJECT_SPEC.md §7 — visible from first launch, so the privacy promise
-/// is never an afterthought.
+/// PROJECT_SPEC.md §7 — visible from first launch, so the privacy
+/// promise is never an afterthought.
 @MainActor
 struct RecordView: View {
 
@@ -15,13 +16,16 @@ struct RecordView: View {
     @State private var levels: [Float] = Array(repeating: 0, count: WaveformView.barCount)
     @State private var lastWrittenURL: URL?
     @State private var errorMessage: String?
+    @State private var copyConfirmationVisible = false
 
+    @Environment(ModelStore.self) private var modelStore
+    @Environment(TranscriptionStore.self) private var transcriptionStore
     @Environment(\.openURL) private var openURL
 
     private let permission: RecordingPermissionAuthority = AVRecordingPermissionAuthority()
 
     var body: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: 20) {
             header
 
             WaveformView(
@@ -34,9 +38,12 @@ struct RecordView: View {
                 isBusy: service.state == .finalizing,
                 action: { Task { await handleRecordTap() } }
             )
+            .disabled(!modelStore.isReadyForTranscription)
 
             statusArea
-                .frame(minHeight: 48)
+                .frame(minHeight: 44)
+
+            transcriptArea
         }
         .padding()
         .task(id: "permission-bootstrap") {
@@ -81,18 +88,17 @@ struct RecordView: View {
                 .multilineTextAlignment(.center)
         } else if permissionStatus == .denied {
             deniedGuidance
-        } else if let url = lastWrittenURL {
+        } else if !modelStore.isReadyForTranscription {
+            modelNotReadyGuidance
+        } else if let url = lastWrittenURL,
+                  transcriptionStore.latest?.audioURL != url {
             VStack(spacing: 4) {
-                Text("Saved to inbox/")
+                ProgressView()
+                Text("Transcribing…")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
-                Text(url.lastPathComponent)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
             }
-        } else {
+        } else if transcriptionStore.latest == nil {
             Text("Tap the mic to start recording.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
@@ -113,6 +119,59 @@ struct RecordView: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
+        }
+    }
+
+    private var modelNotReadyGuidance: some View {
+        VStack(spacing: 6) {
+            Text("Download a model to get started.")
+                .font(.footnote.bold())
+            Text("Go to Settings → Model and pick one.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .multilineTextAlignment(.center)
+    }
+
+    // MARK: - Transcript area
+
+    @ViewBuilder
+    private var transcriptArea: some View {
+        if let outcome = transcriptionStore.latest {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Latest transcript")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button {
+                        UIPasteboard.general.string = outcome.rawText
+                        copyConfirmationVisible = true
+                        Task {
+                            try? await Task.sleep(nanoseconds: 1_500_000_000)
+                            copyConfirmationVisible = false
+                        }
+                    } label: {
+                        Label(
+                            copyConfirmationVisible ? "Copied" : "Copy",
+                            systemImage: copyConfirmationVisible ? "checkmark" : "doc.on.doc"
+                        )
+                        .labelStyle(.titleAndIcon)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .accessibilityLabel(copyConfirmationVisible ? "Copied to clipboard" : "Copy transcript")
+                }
+
+                Text(outcome.rawText)
+                    .font(.body)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+                    .background(.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                    .textSelection(.enabled)
+            }
+            .padding(.horizontal, 4)
+            .transition(.opacity)
         }
     }
 
@@ -170,4 +229,6 @@ struct RecordView: View {
 
 #Preview {
     RecordView()
+        .environment(PreviewFixtures.modelStore)
+        .environment(PreviewFixtures.transcriptionStore)
 }
