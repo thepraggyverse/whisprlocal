@@ -80,7 +80,8 @@ final class InboxJobWatcherTests: XCTestCase {
             transcriber: stub,
             store: store,
             modelIdProvider: { "whisper-base" },
-            inboxURLProvider: { [tempInbox] in tempInbox }
+            inboxURLProvider: { [tempInbox] in tempInbox },
+            retainInputsForDebug: false
         )
 
         await watcher.scanAndProcess()
@@ -102,7 +103,8 @@ final class InboxJobWatcherTests: XCTestCase {
             transcriber: StubTranscriber(),
             store: store,
             modelIdProvider: { nil },
-            inboxURLProvider: { [tempInbox] in tempInbox }
+            inboxURLProvider: { [tempInbox] in tempInbox },
+            retainInputsForDebug: false
         )
 
         await watcher.scanAndProcess()
@@ -123,7 +125,8 @@ final class InboxJobWatcherTests: XCTestCase {
             transcriber: AlwaysFailingTranscriber(),
             store: store,
             modelIdProvider: { "whisper-base" },
-            inboxURLProvider: { [tempInbox] in tempInbox }
+            inboxURLProvider: { [tempInbox] in tempInbox },
+            retainInputsForDebug: false
         )
 
         await watcher.scanAndProcess()
@@ -146,7 +149,8 @@ final class InboxJobWatcherTests: XCTestCase {
             transcriber: StubTranscriber(),
             store: store,
             modelIdProvider: { "whisper-base" },
-            inboxURLProvider: { [tempInbox] in tempInbox }
+            inboxURLProvider: { [tempInbox] in tempInbox },
+            retainInputsForDebug: false
         )
 
         await watcher.scanAndProcess()
@@ -165,7 +169,8 @@ final class InboxJobWatcherTests: XCTestCase {
             transcriber: StubTranscriber(),
             store: store,
             modelIdProvider: { "whisper-base" },
-            inboxURLProvider: { nil }
+            inboxURLProvider: { nil },
+            retainInputsForDebug: false
         )
         await watcher.scanAndProcess()
         XCTAssertTrue(store.outcomes.isEmpty)

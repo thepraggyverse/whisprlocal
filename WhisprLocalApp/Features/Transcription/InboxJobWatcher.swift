@@ -34,6 +34,12 @@ final class InboxJobWatcher {
     private let inboxURLProvider: @Sendable () -> URL?
     private let notificationCenter: DarwinNotificationCenter
     private let fileManager: FileManager
+    /// When `true`, `processJob` skips the §8.6 cleanup step and leaves the
+    /// WAV + envelope in `inbox/` for post-hoc inspection via Xcode's
+    /// Devices → Download Container flow. Defaults to DEBUG on,
+    /// Release off (release builds always honor the privacy contract).
+    /// Tests inject `false` explicitly to assert cleanup.
+    private let retainInputsForDebug: Bool
     private let logger = Logger(
         subsystem: "com.praggy.whisprlocal.app",
         category: "InboxJobWatcher"
@@ -42,13 +48,26 @@ final class InboxJobWatcher {
     private var notifyToken: Int32 = -1
     private var inFlightJobIds: Set<UUID> = []
 
+    /// Default value of `retainInputsForDebug` — DEBUG builds retain,
+    /// Release builds delete. Surfaced as a static so callers can see the
+    /// default without grepping the init. `nonisolated` so the init's
+    /// default-parameter closure can reach it from anywhere.
+    nonisolated static var defaultRetainForDebug: Bool {
+        #if DEBUG
+        return true
+        #else
+        return false
+        #endif
+    }
+
     init(
         transcriber: any Transcriber,
         store: TranscriptionStore,
         modelIdProvider: @escaping @MainActor () -> String?,
         inboxURLProvider: @escaping @Sendable () -> URL? = { AppGroupPaths.inboxURL },
         notificationCenter: DarwinNotificationCenter = SystemDarwinNotificationCenter(),
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        retainInputsForDebug: Bool = InboxJobWatcher.defaultRetainForDebug
     ) {
         self.transcriber = transcriber
         self.store = store
@@ -56,6 +75,7 @@ final class InboxJobWatcher {
         self.inboxURLProvider = inboxURLProvider
         self.notificationCenter = notificationCenter
         self.fileManager = fileManager
+        self.retainInputsForDebug = retainInputsForDebug
     }
 
     deinit {
@@ -184,7 +204,13 @@ final class InboxJobWatcher {
         // failure too; keeping audio around "in case" leaks the privacy
         // contract. Failures must be diagnosed from logs, not from WAVs
         // sitting in the App Group.
-        try? fileManager.removeItem(at: pair.wav)
-        try? fileManager.removeItem(at: pair.envelope)
+        if retainInputsForDebug {
+            logger.info(
+                "DEBUG retention: keeping \(pair.wav.lastPathComponent, privacy: .public) + envelope in inbox for inspection"
+            )
+        } else {
+            try? fileManager.removeItem(at: pair.wav)
+            try? fileManager.removeItem(at: pair.envelope)
+        }
     }
 }

@@ -111,6 +111,9 @@ final class AudioCaptureService {
         self.outputFile = file
         self.currentFileURL = fileURL
 
+        AudioCaptureDiagnostics.logInputFormat(inputFormat, logger: logger)
+        AudioCaptureDiagnostics.logSessionState(logger: logger)
+
         installTap(on: inputNode, inputFormat: inputFormat, converter: converter, file: file)
 
         engine.prepare()
@@ -156,6 +159,8 @@ final class AudioCaptureService {
         } catch {
             logger.error("Setting file protection failed: \(error.localizedDescription)")
         }
+
+        AudioCaptureDiagnostics.logWAVStats(at: url, logger: logger)
 
         // IPC handoff: write {uuid}.json envelope alongside the WAV and post
         // DarwinNotificationNames.jobQueued so the InboxJobWatcher picks up
@@ -288,6 +293,15 @@ final class AudioCaptureService {
                     tapLogger.error("WAV write failed: \(error.localizedDescription)")
                     return
                 }
+
+                // Diagnostic: log tap index + RMS + peak (and first
+                // samples for the first few taps) via the helper that
+                // keeps this closure short enough to fit SwiftLint's
+                // class-body budget.
+                let idx = fileBox.tapCount
+                fileBox.tapCount = idx + 1
+                AudioCaptureDiagnostics.logTap(index: idx, buffer: converted, logger: tapLogger)
+
                 let level = Self.rmsLevel(of: converted)
                 tapContinuation.yield(level)
             }
@@ -317,12 +331,15 @@ final class AudioCaptureService {
         // the 16 kHz float path, so scale x4 and clamp for a lively bar.
         return min(1.0, rms * 4.0)
     }
+
 }
 
 /// Small reference box so the tap closure can read the in-flight AVAudioFile
 /// without a strong capture of the capture service itself. `cancel()` clears
-/// `file` to make subsequent tap ticks no-ops.
+/// `file` to make subsequent tap ticks no-ops. `tapCount` is bumped inside
+/// the serial tap queue for diagnostic log tagging.
 private final class AudioFileBox: @unchecked Sendable {
     var file: AVAudioFile?
+    var tapCount: Int = 0
     init(file: AVAudioFile) { self.file = file }
 }
