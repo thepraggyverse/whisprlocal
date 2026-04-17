@@ -81,11 +81,11 @@ final class AudioConverterTests: XCTestCase {
         buffer.frameLength = frameCount
 
         let channels = Int(format.channelCount)
-        for ch in 0..<channels {
-            let amp = amplitudes[ch % amplitudes.count]
-            let ptr = buffer.floatChannelData![ch]
-            for i in 0..<Int(frameCount) {
-                ptr[i] = amp
+        for channel in 0..<channels {
+            let amp = amplitudes[channel % amplitudes.count]
+            let ptr = buffer.floatChannelData![channel]
+            for idx in 0..<Int(frameCount) {
+                ptr[idx] = amp
             }
         }
         return buffer

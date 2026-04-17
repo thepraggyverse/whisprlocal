@@ -73,83 +73,26 @@ final class AudioCaptureService {
         guard state == .idle else {
             throw CaptureError.invalidState(state)
         }
-        guard let inboxURL = inboxURLProvider() else {
-            throw CaptureError.appGroupContainerMissing
-        }
-        try FileManager.default.createDirectory(
-            at: inboxURL,
-            withIntermediateDirectories: true
-        )
-
-        let session = AVAudioSession.sharedInstance()
-        do {
-            try session.setCategory(.record, mode: .measurement)
-            try session.setActive(true)
-        } catch {
-            logger.error("Audio session activation failed: \(error.localizedDescription)")
-            throw CaptureError.sessionActivationFailed
-        }
+        let inboxURL = try resolveInboxURL()
+        try activateSession()
 
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
         let inputFormat = inputNode.outputFormat(forBus: 0)
-
         guard inputFormat.sampleRate > 0 else {
             throw CaptureError.engineFailed("input sample rate is 0 — no microphone?")
         }
 
-        let converter: AudioConverter
-        do {
-            converter = try AudioConverter(inputFormat: inputFormat)
-        } catch {
-            throw CaptureError.engineFailed("converter init failed: \(error)")
-        }
-
+        let converter = try makeConverter(inputFormat: inputFormat)
         let fileURL = inboxURL.appendingPathComponent("\(UUID().uuidString).wav")
-        let file: AVAudioFile
-        do {
-            file = try AVAudioFile(
-                forWriting: fileURL,
-                settings: converter.outputFormat.settings,
-                commonFormat: .pcmFormatFloat32,
-                interleaved: false
-            )
-        } catch {
-            throw CaptureError.engineFailed("AVAudioFile open failed: \(error)")
-        }
+        let file = try openOutputFile(at: fileURL, outputFormat: converter.outputFormat)
 
         self.engine = engine
         self.converter = converter
         self.outputFile = file
         self.currentFileURL = fileURL
 
-        // Capture local references so the tap closure does not touch self.
-        let tapQueue = serialQueue
-        let tapConverter = converter
-        let tapContinuation = levelContinuation
-        let tapLogger = logger
-        // outputFile is captured via a weak box so cancel() can clear it and
-        // subsequent tap callbacks become no-ops.
-        let fileBox = AudioFileBox(file: file)
-
-        inputNode.installTap(
-            onBus: 0,
-            bufferSize: 1024,
-            format: inputFormat
-        ) { buffer, _ in
-            tapQueue.async {
-                guard let file = fileBox.file else { return }
-                guard let converted = try? tapConverter.convert(buffer) else { return }
-                do {
-                    try file.write(from: converted)
-                } catch {
-                    tapLogger.error("WAV write failed: \(error.localizedDescription)")
-                    return
-                }
-                let level = Self.rmsLevel(of: converted)
-                tapContinuation.yield(level)
-            }
-        }
+        installTap(on: inputNode, inputFormat: inputFormat, converter: converter, file: file)
 
         engine.prepare()
         do {
@@ -238,6 +181,84 @@ final class AudioCaptureService {
 
     // MARK: - Helpers
 
+    private func resolveInboxURL() throws -> URL {
+        guard let inboxURL = inboxURLProvider() else {
+            throw CaptureError.appGroupContainerMissing
+        }
+        try FileManager.default.createDirectory(
+            at: inboxURL,
+            withIntermediateDirectories: true
+        )
+        return inboxURL
+    }
+
+    private func activateSession() throws {
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.setCategory(.record, mode: .measurement)
+            try session.setActive(true)
+        } catch {
+            logger.error("Audio session activation failed: \(error.localizedDescription)")
+            throw CaptureError.sessionActivationFailed
+        }
+    }
+
+    private func makeConverter(inputFormat: AVAudioFormat) throws -> AudioConverter {
+        do {
+            return try AudioConverter(inputFormat: inputFormat)
+        } catch {
+            throw CaptureError.engineFailed("converter init failed: \(error)")
+        }
+    }
+
+    private func openOutputFile(at url: URL, outputFormat: AVAudioFormat) throws -> AVAudioFile {
+        do {
+            return try AVAudioFile(
+                forWriting: url,
+                settings: outputFormat.settings,
+                commonFormat: .pcmFormatFloat32,
+                interleaved: false
+            )
+        } catch {
+            throw CaptureError.engineFailed("AVAudioFile open failed: \(error)")
+        }
+    }
+
+    private func installTap(
+        on inputNode: AVAudioInputNode,
+        inputFormat: AVAudioFormat,
+        converter: AudioConverter,
+        file: AVAudioFile
+    ) {
+        // Capture local references so the tap closure does not touch self.
+        let tapQueue = serialQueue
+        let tapConverter = converter
+        let tapContinuation = levelContinuation
+        let tapLogger = logger
+        // outputFile is captured via a box so cancel() can clear it and
+        // subsequent tap callbacks become no-ops.
+        let fileBox = AudioFileBox(file: file)
+
+        inputNode.installTap(
+            onBus: 0,
+            bufferSize: 1024,
+            format: inputFormat
+        ) { buffer, _ in
+            tapQueue.async {
+                guard let boxedFile = fileBox.file else { return }
+                guard let converted = try? tapConverter.convert(buffer) else { return }
+                do {
+                    try boxedFile.write(from: converted)
+                } catch {
+                    tapLogger.error("WAV write failed: \(error.localizedDescription)")
+                    return
+                }
+                let level = Self.rmsLevel(of: converted)
+                tapContinuation.yield(level)
+            }
+        }
+    }
+
     private func flushSerialQueue() async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             serialQueue.async {
@@ -252,8 +273,8 @@ final class AudioCaptureService {
         }
         let count = Int(buffer.frameLength)
         var sum: Float = 0
-        for i in 0..<count {
-            let sample = channel[i]
+        for idx in 0..<count {
+            let sample = channel[idx]
             sum += sample * sample
         }
         let rms = sqrtf(sum / Float(count))

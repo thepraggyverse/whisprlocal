@@ -20,8 +20,8 @@ struct WaveformView: View {
 
     var body: some View {
         HStack(spacing: spacing) {
-            ForEach(0..<Self.barCount, id: \.self) { i in
-                let level = i < levels.count ? levels[i] : 0
+            ForEach(0..<Self.barCount, id: \.self) { idx in
+                let level = idx < levels.count ? levels[idx] : 0
                 Capsule()
                     .fill(.tint.opacity(isActive ? 1.0 : 0.35))
                     .frame(width: barWidth, height: height(for: level))

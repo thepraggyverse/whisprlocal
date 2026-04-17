@@ -37,8 +37,8 @@ final class AudioCaptureServiceTests: XCTestCase {
             _ = try await service.stop()
             XCTFail("expected error")
         } catch let error as AudioCaptureService.CaptureError {
-            if case .invalidState(let s) = error {
-                XCTAssertEqual(s, .idle)
+            if case .invalidState(let state) = error {
+                XCTAssertEqual(state, .idle)
             } else {
                 XCTFail("unexpected variant: \(error)")
             }
@@ -57,7 +57,7 @@ final class AudioCaptureServiceTests: XCTestCase {
         let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1000)!
         buffer.frameLength = 1000
         let samples = buffer.floatChannelData![0]
-        for i in 0..<1000 { samples[i] = 0.1 }
+        for idx in 0..<1000 { samples[idx] = 0.1 }
 
         // RMS(constant=0.1) = 0.1. Scaled ×4 → 0.4, clamped ≤ 1.
         let level = AudioCaptureService.rmsLevel(of: buffer)

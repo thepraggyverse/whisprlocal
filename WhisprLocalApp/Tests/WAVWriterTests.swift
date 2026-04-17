@@ -55,8 +55,8 @@ final class WAVWriterTests: XCTestCase {
 
         let written = buffer.floatChannelData![0]
         let read = readBuffer.floatChannelData![0]
-        for i in 0..<min(writtenCount, readCount) {
-            XCTAssertEqual(written[i], read[i], accuracy: 1e-5)
+        for idx in 0..<min(writtenCount, readCount) {
+            XCTAssertEqual(written[idx], read[idx], accuracy: 1e-5)
         }
     }
 
@@ -120,8 +120,8 @@ final class WAVWriterTests: XCTestCase {
 
         let samples = buffer.floatChannelData![0]
         let omega = 2.0 * .pi * frequency / AudioFormat.sampleRate
-        for i in 0..<Int(frameCount) {
-            samples[i] = amplitude * Float(sin(Double(i) * omega))
+        for idx in 0..<Int(frameCount) {
+            samples[idx] = amplitude * Float(sin(Double(idx) * omega))
         }
         return buffer
     }
