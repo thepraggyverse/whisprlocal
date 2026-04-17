@@ -36,6 +36,10 @@ Models/
 !WhisprLocalApp/Tests/Fixtures/**/*.wav
 !Shared/Tests/**/*.wav
 
+# xcodegen-generated Info.plists — source of truth is project.yml
+WhisprLocalApp/Info.plist
+WhisprKeyboard/Info.plist
+
 # Mint
 .mint/
 
