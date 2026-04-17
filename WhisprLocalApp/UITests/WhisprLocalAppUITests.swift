@@ -37,12 +37,30 @@ final class WhisprLocalAppUITests: XCTestCase {
         let app = XCUIApplication()
         app.launch()
 
-        // RecordButton accessibility label in idle state.
+        // RecordButton accessibility label in idle state. At M2 the button
+        // is rendered but disabled on a fresh install (no model downloaded);
+        // smoke-test only asserts presence, not enabled state.
         let startButton = app.buttons["Start recording"]
         XCTAssertTrue(
             startButton.waitForExistence(timeout: 5),
             "'Start recording' button was not found on the record screen"
         )
-        XCTAssertTrue(startButton.isEnabled)
+    }
+
+    func testSettingsTabReachable() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        let settingsTab = app.tabBars.buttons["Settings"]
+        XCTAssertTrue(
+            settingsTab.waitForExistence(timeout: 5),
+            "Settings tab button is missing"
+        )
+        settingsTab.tap()
+
+        XCTAssertTrue(
+            app.navigationBars["Settings"].waitForExistence(timeout: 5),
+            "Settings navigation title did not appear after tapping the tab"
+        )
     }
 }

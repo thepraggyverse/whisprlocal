@@ -51,10 +51,12 @@ actor ModelDownloadService: ModelDownloading {
     )
 
     /// - Parameter modelFolderURL: destination root. Commonly
-    ///   `Application Support/Models/`. Created if missing.
-    init(modelFolderURL: URL) throws {
+    ///   `Application Support/Models/`. Created best-effort here; a later
+    ///   download call re-asserts, so init cannot fail the app launch on
+    ///   a transient FS hiccup.
+    init(modelFolderURL: URL) {
         self.modelFolderURL = modelFolderURL
-        try FileManager.default.createDirectory(
+        try? FileManager.default.createDirectory(
             at: modelFolderURL,
             withIntermediateDirectories: true
         )
@@ -81,6 +83,8 @@ actor ModelDownloadService: ModelDownloading {
         let downloadBase = modelFolderURL
         let variant = entry.variantName
         let repo = entry.huggingFaceRepo
+        // Re-assert the destination exists in case init couldn't create it.
+        try FileManager.default.createDirectory(at: downloadBase, withIntermediateDirectories: true)
         logger.info("Downloading \(variant, privacy: .public) from \(repo, privacy: .public)")
 
         let task = Task { () -> URL in
