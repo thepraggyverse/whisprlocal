@@ -1,0 +1,29 @@
+# Note: `swiftlint lint` exits 1 on an empty tree (no .swift files in `included:` paths).
+# This is expected during early M0 scaffolding (commits 1–3). Goes green at Commit 4
+# when Shared/Sources/WhisprShared/*.swift land.
+
+disabled_rules:
+  - trailing_whitespace
+  - line_length
+  - todo
+
+opt_in_rules:
+  - closure_spacing
+  - contains_over_first_not_nil
+  - empty_count
+  - explicit_init
+  - implicit_return
+  - prefer_zero_over_explicit_init
+
+included:
+  - WhisprLocalApp
+  - WhisprKeyboard
+  - Shared/Sources
+
+excluded:
+  - .build
+  - DerivedData
+  - Shared/.build
+  - WhisprLocal.xcodeproj
+
+reporter: "xcode"

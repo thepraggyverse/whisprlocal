@@ -1,0 +1,48 @@
+# Xcode — walk-down negation so Package.resolved is tracked but nothing else inside .xcodeproj is
+*.xcodeproj/*
+!*.xcodeproj/project.xcworkspace/
+*.xcodeproj/project.xcworkspace/*
+!*.xcodeproj/project.xcworkspace/xcshareddata/
+*.xcodeproj/project.xcworkspace/xcshareddata/*
+!*.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+*.xcworkspace/xcuserdata/
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+
+# SwiftPM
+.build/
+.swiftpm/
+Packages/
+
+# macOS
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# Model weights — never commit (they're huge and user-downloaded at runtime)
+*.mlmodelc/
+*.mlpackage/
+Models/
+*.gguf
+*.safetensors
+*.bin
+*.onnx
+
+# Audio — commit only fixtures under test directories
+*.wav
+!WhisprLocalApp/Tests/Fixtures/**/*.wav
+!Shared/Tests/**/*.wav
+
+# Mint
+.mint/
+
+# Claude Code local state (shared: commands/, settings.json; local: below)
+.claude/local/
+.claude/session/
+
+# IDE
+.idea/
+.vscode/
