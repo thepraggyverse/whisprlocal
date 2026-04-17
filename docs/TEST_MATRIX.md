@@ -52,3 +52,31 @@ supported via larger model variants (`whisper-small`, `whisper-large-v3-turbo`).
 
 Forthcoming at M7. The intent is a single checklist per device/OS cell,
 manual execution with screenshots, results committed to this document.
+
+## Opt-in integration tests
+
+Some tests in `WhisprLocalApp/Tests/` download real weights and run real
+Core ML inference. They are **skipped in default CI** because they need
+network (a ~40 MB download on first run), a warm Core ML cache, and a
+real iOS Simulator device. Run them manually when you want to verify the
+ADR-002 mitigations against real weights, or before shipping a milestone
+that touched `WhisperEngine`.
+
+### `WhisperEngineIntegrationTests` — M2
+
+Gated on the `WHISPR_INTEGRATION=1` environment variable. Runs the
+tiny English Whisper variant (`openai_whisper-tiny.en`) against a
+procedurally-generated 2 s silent WAV that matches the M1 capture
+format (16 kHz Float32 mono). Does not assert a transcript — absence
+of crash on iOS 26 is the contract.
+
+```bash
+WHISPR_INTEGRATION=1 xcodebuild test \
+  -scheme WhisprLocalApp \
+  -destination 'platform=iOS Simulator,OS=latest,name=iPhone 17 Pro' \
+  -only-testing:WhisprLocalAppTests/WhisperEngineIntegrationTests
+```
+
+A real CC-licensed speech fixture (so the test can also assert a
+transcript string contains something) lands in M7 hardening per
+spec §10.
