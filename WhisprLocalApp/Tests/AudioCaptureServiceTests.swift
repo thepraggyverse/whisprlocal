@@ -39,6 +39,41 @@ final class AudioCaptureServiceTests: XCTestCase {
         }
     }
 
+    // MARK: - Bugbot #4 regression — fileBox is actually cleared
+
+    /// The installTap comment promised that `cancel()` and `stop()` clear
+    /// `fileBox.file` so any straggling tap callback becomes a no-op. Pre-
+    /// fix, `fileBox` was a local variable in `installTap` — nothing could
+    /// reach it. This test pins the contract: after a failed `start()`
+    /// (which is the only failure path our unit test can reliably drive
+    /// through `installTap`), the service's fileBox is nil.
+    func testFileBoxIsClearedAfterStartFailure() async throws {
+        let tempInbox = try makeTempInbox()
+        defer { try? FileManager.default.removeItem(at: tempInbox) }
+
+        struct SimulatedEngineStartFailure: Error {}
+
+        let service = AudioCaptureService(
+            inboxURLProvider: { tempInbox },
+            engineStarter: { _ in throw SimulatedEngineStartFailure() }
+        )
+
+        do {
+            try await service.start()
+            XCTFail("expected engineStarter to throw")
+        } catch is AudioCaptureService.CaptureError {
+            // Expected.
+        } catch {
+            throw XCTSkip("skipping — start() bailed before engineStarter: \(error)")
+        }
+
+        let snapshot = service.stateSnapshotForTests
+        XCTAssertFalse(
+            snapshot.hasFileBox,
+            "fileBox reference must be cleared — otherwise the installTap comment's claim that cancel/stop neutralize the tap's write path is a lie."
+        )
+    }
+
     // MARK: - Bugbot #2 regression — start() failure cleanup
 
     func testStartFailureClearsStateAndDeletesOrphanWAV() async throws {
@@ -77,6 +112,10 @@ final class AudioCaptureServiceTests: XCTestCase {
         XCTAssertFalse(snapshot.hasConverter, "converter reference leaked after failure")
         XCTAssertFalse(snapshot.hasOutputFile, "outputFile reference leaked after failure")
         XCTAssertNil(snapshot.currentFileURL, "currentFileURL leaked after failure")
+        // Bugbot #4 cross-check: the tap file-box must be cleared too so
+        // any straggling serial-queue block short-circuits instead of
+        // writing into a neutralized WAV.
+        XCTAssertFalse(snapshot.hasFileBox, "fileBox reference leaked after failure")
 
         // And the zero-byte orphan WAV on disk must be gone — otherwise
         // every retry grows the App Group inbox and the InboxJobWatcher

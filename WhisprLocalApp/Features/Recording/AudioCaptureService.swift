@@ -56,10 +56,18 @@ final class AudioCaptureService {
     private let engineStarter: @Sendable (AVAudioEngine) throws -> Void
     private let logger = Logger(subsystem: "com.praggy.whisprlocal.app", category: "AudioCapture")
 
-    private var engine: AVAudioEngine?
-    private var converter: AudioConverter?
-    private var outputFile: AVAudioFile?
-    private var currentFileURL: URL?
+    // These five are `internal` (not `private`) so the DEBUG-only testing
+    // extension in AudioCaptureService+Testing.swift can read them. They
+    // stay invisible outside this module.
+    var engine: AVAudioEngine?
+    var converter: AudioConverter?
+    var outputFile: AVAudioFile?
+    var currentFileURL: URL?
+    // Strong handle to the box the tap closure reads from. Held here so
+    // stop()/cancel() can clear `fileBox.file` before new tap buffers are
+    // dispatched — any in-flight serial-queue block short-circuits on a
+    // nil `file` and becomes a no-op.
+    var fileBox: AudioFileBox?
     private let serialQueue = DispatchQueue(
         label: "com.praggy.whisprlocal.capture",
         qos: .userInitiated
@@ -129,6 +137,8 @@ final class AudioCaptureService {
             // Drop the AVAudioFile reference *before* removing the file
             // so the RIFF write handle is closed first; otherwise
             // removeItem can fail silently on some volumes.
+            self.fileBox?.file = nil
+            self.fileBox = nil
             self.outputFile = nil
             self.engine = nil
             self.converter = nil
@@ -163,6 +173,13 @@ final class AudioCaptureService {
         engine?.stop()
 
         await flushSerialQueue()
+
+        // Neutralize the tap's file handle first. Any serial-queue block
+        // that squeezes through after removeTap + flush hits the `guard`
+        // on a nil `file` and no-ops — no rogue writes into a file we're
+        // about to finalize.
+        fileBox?.file = nil
+        fileBox = nil
 
         // Closing the AVAudioFile (via dropping the strong reference)
         // finalizes the RIFF header on disk.
@@ -221,6 +238,12 @@ final class AudioCaptureService {
         engine?.stop()
 
         await flushSerialQueue()
+
+        // Clear the tap's file reference so any straggling serial-queue
+        // block short-circuits before we remove the underlying WAV.
+        fileBox?.file = nil
+        fileBox = nil
+
         outputFile = nil
 
         if let url = currentFileURL {
@@ -314,9 +337,12 @@ extension AudioCaptureService {
         let tapConverter = converter
         let tapContinuation = levelContinuation
         let tapLogger = logger
-        // outputFile is captured via a box so cancel() can clear it and
-        // subsequent tap callbacks become no-ops.
-        let fileBox = AudioFileBox(file: file)
+        // The AVAudioFile is captured by the tap via a reference box. The
+        // class also holds the box (self.fileBox) so stop() / cancel() can
+        // clear `file` before any in-flight serial-queue block runs —
+        // those blocks then short-circuit on the nil guard and no-op.
+        let box = AudioFileBox(file: file)
+        self.fileBox = box
 
         inputNode.installTap(
             onBus: 0,
@@ -324,7 +350,7 @@ extension AudioCaptureService {
             format: inputFormat
         ) { buffer, _ in
             tapQueue.async {
-                guard let boxedFile = fileBox.file else { return }
+                guard let boxedFile = box.file else { return }
                 guard let converted = try? tapConverter.convert(buffer) else { return }
                 do {
                     try boxedFile.write(from: converted)
@@ -347,35 +373,12 @@ extension AudioCaptureService {
     }
 }
 
-#if DEBUG
-extension AudioCaptureService {
-    /// Test-only snapshot of the internal cleanup-sensitive state. Used by
-    /// the Bugbot M1 #2 regression test to verify `start()`'s failure path
-    /// leaves no dangling engine, converter, output file, or file URL.
-    struct InternalStateSnapshot: Equatable {
-        let state: State
-        let hasEngine: Bool
-        let hasConverter: Bool
-        let hasOutputFile: Bool
-        let currentFileURL: URL?
-    }
-
-    var stateSnapshotForTests: InternalStateSnapshot {
-        InternalStateSnapshot(
-            state: state,
-            hasEngine: engine != nil,
-            hasConverter: converter != nil,
-            hasOutputFile: outputFile != nil,
-            currentFileURL: currentFileURL
-        )
-    }
-}
-#endif
-
-/// Small reference box so the tap closure can read the in-flight AVAudioFile
-/// without a strong capture of the capture service itself. `cancel()` clears
-/// `file` to make subsequent tap ticks no-ops.
-private final class AudioFileBox: @unchecked Sendable {
+/// Reference box so the tap closure can read the in-flight AVAudioFile
+/// without a strong capture of the capture service itself. The service
+/// also holds this box so `stop()` and `cancel()` can clear `file` before
+/// any pending serial-queue block runs — they then short-circuit on the
+/// nil `file` guard and become no-ops.
+final class AudioFileBox: @unchecked Sendable {
     var file: AVAudioFile?
     init(file: AVAudioFile) { self.file = file }
 }
