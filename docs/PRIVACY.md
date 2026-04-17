@@ -59,12 +59,17 @@ summary and the engineering contract.
   regex logic) scan for: forbidden SDK imports, `URLSession`/`URLRequest`
   usage outside `ModelDownloader`, ML imports inside `WhisprKeyboard/`,
   and `UIPasteboard` reads/writes in the keyboard. Any hit fails the gate.
-- **File-protection attribute** — `WhisprShared.AppGroupPaths`'s writes
-  always pass `[.completeFileProtection]` at the `NSFileProtection` level.
-  Covered by the audit sweep at every milestone.
+- **File-protection attribute** — every write to `App Group/inbox/` sets
+  `FileProtectionType.complete` via `FileManager.setAttributes`. Enforced
+  at M1 by `AudioCaptureService.stop()` and `WAVWriter.write(_:to:)`, and
+  verified by `WAVWriterTests.testFileProtectionComplete` (assertion is
+  device-strict, simulator-tolerant since iOS Data Protection is not
+  enforced on the macOS-backed simulator).
 - **Auto-deletion** — the transcription pipeline deletes the inbox WAV
   before returning. The keyboard deletes the outbox TXT after calling
-  `insertText(_:)` or after a 60 s timer, whichever fires first.
+  `insertText(_:)` or after a 60 s timer, whichever fires first. As of
+  M1 the WAVs remain in `inbox/` until M2's WhisperEngine consumes them;
+  this is an intentional in-flight state, not a leak.
 
 ## What we do not do
 

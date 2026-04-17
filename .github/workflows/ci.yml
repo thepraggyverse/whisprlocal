@@ -17,7 +17,7 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Select Xcode
         # GitHub's macos-15 image ships multiple Xcode versions; pin to the
@@ -63,8 +63,34 @@ jobs:
             -project WhisprLocal.xcodeproj \
             -scheme WhisprLocalApp \
             -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build \
             build \
             | tail -60
+
+      - name: Verify App Group entitlement is embedded
+        run: |
+          # Simulator Debug binaries store entitlements in the Mach-O
+          # __TEXT,__entitlements section, NOT in the codesign signature.
+          # Check both locations so this works for device and sim builds.
+          APP=./build/Build/Products/Debug-iphonesimulator/WhisprLocalApp.app
+          BIN="$APP/WhisprLocalApp"
+
+          CS_ENTS=$(codesign -d --entitlements - "$APP" 2>&1 || true)
+          MACHO_ENTS=$(otool -s __TEXT __entitlements "$BIN" 2>/dev/null \
+            | awk 'NR>2 {for(i=2;i<=17;i++) printf "%s", $i; print ""}' \
+            | xxd -r -p 2>/dev/null || true)
+
+          echo "--- codesign entitlements ---"
+          echo "$CS_ENTS"
+          echo "--- Mach-O __entitlements section (simulator) ---"
+          echo "$MACHO_ENTS" | head -20
+
+          if echo "$CS_ENTS$MACHO_ENTS" | grep -q "com.apple.security.application-groups"; then
+            echo "OK: App Group entitlement present."
+          else
+            echo "FAIL: App Group entitlement missing from binary"
+            exit 1
+          fi
 
       - name: Build keyboard extension
         run: |
