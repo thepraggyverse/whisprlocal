@@ -14,7 +14,7 @@ jobs:
   build-and-test:
     name: Build + test (iOS Simulator)
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v6
@@ -24,11 +24,31 @@ jobs:
         # one closest to the local dev setup (Xcode 16+). Bump when we move
         # to a newer iOS deployment floor.
         run: |
+          set -euo pipefail
           sudo xcode-select -s /Applications/Xcode_16.app || true
           xcodebuild -version
 
+      - name: Install iOS simulator runtime
+        # Defense against GitHub runner-image drift. We hit this on M2:
+        # a rotation of the `macos-15` image shipped an Xcode without the
+        # iOS Simulator runtime, and `xcodebuild build -destination
+        # 'generic/platform=iOS Simulator'` failed destination validation.
+        # Our CI had been hiding the failure behind `| tail -60`, so the
+        # build step reported success and the next step blew up on a
+        # missing .app bundle. Materialize the iOS runtime explicitly now
+        # so we don't depend on the image being pre-baked; this is
+        # idempotent when the runtime is already installed.
+        run: |
+          set -euo pipefail
+          echo "--- simctl runtimes before ---"
+          xcrun simctl list runtimes
+          xcodebuild -downloadPlatform iOS
+          echo "--- simctl runtimes after ---"
+          xcrun simctl list runtimes
+
       - name: Install toolchain via Mint
         run: |
+          set -euo pipefail
           # ripgrep is not preinstalled on macos-15 runners but the Privacy
           # pattern audit step relies on `rg`. Install alongside Mint so both
           # CI and local dev use the same tool surface.
@@ -43,7 +63,7 @@ jobs:
 
       - name: Privacy pattern audit (inline — single source of truth with /audit-privacy)
         run: |
-          set -e
+          set -euo pipefail
           echo "→ Forbidden analytics/crash SDK imports"
           ! rg -i --type swift '^\s*import\s+(Mixpanel|Segment|Firebase|Sentry|Amplitude|PostHog|Bugsnag|Crashlytics|Datadog|Adjust|AppsFlyer|Branch)' .
           echo "→ Cloud AI SDK imports"
@@ -58,22 +78,45 @@ jobs:
           echo "All privacy checks passed."
 
       - name: Build main app
+        # Do NOT pipe xcodebuild's output to `tail`, `head`, `grep`, or any
+        # other filter without `set -o pipefail`. The pipe rewrites the
+        # step's exit code to that of the final tool — which succeeds on
+        # empty input — and a broken build then reports "success".
+        # Diagnosed in the M2 retro: we lost ~36 minutes of CI red when a
+        # missing iOS Simulator runtime caused `xcodebuild build` to exit
+        # nonzero, the output was truncated by `| tail -60`, and the
+        # missing .app bundle only surfaced at the next step. Let
+        # xcodebuild's exit code propagate verbatim.
         run: |
+          set -euo pipefail
           xcodebuild \
             -project WhisprLocal.xcodeproj \
             -scheme WhisprLocalApp \
             -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath build \
-            build \
-            | tail -60
+            build
 
       - name: Verify App Group entitlement is embedded
+        # Simulator Debug binaries store entitlements in the Mach-O
+        # __TEXT,__entitlements section, NOT in the codesign signature.
+        # Check both locations so this works for device and sim builds.
+        #
+        # If the .app bundle is missing here, an earlier build step
+        # failed silently. Surface that before the entitlement check so
+        # the CI log says "upstream build didn't produce a bundle" rather
+        # than "file not found".
         run: |
-          # Simulator Debug binaries store entitlements in the Mach-O
-          # __TEXT,__entitlements section, NOT in the codesign signature.
-          # Check both locations so this works for device and sim builds.
+          set -euo pipefail
           APP=./build/Build/Products/Debug-iphonesimulator/WhisprLocalApp.app
           BIN="$APP/WhisprLocalApp"
+
+          if [ ! -d "$APP" ]; then
+            echo "FAIL: 'Build main app' did not produce a bundle at $APP"
+            echo "      An earlier step failed silently — check the build log"
+            echo "      for destination-validation errors or exit-code-swallowing"
+            echo "      pipes. See the M2 retro in docs/RETROSPECTIVES.md."
+            exit 1
+          fi
 
           CS_ENTS=$(codesign -d --entitlements - "$APP" 2>&1 || true)
           MACHO_ENTS=$(otool -s __TEXT __entitlements "$BIN" 2>/dev/null \
@@ -94,24 +137,24 @@ jobs:
 
       - name: Build keyboard extension
         run: |
+          set -euo pipefail
           xcodebuild \
             -project WhisprLocal.xcodeproj \
             -scheme WhisprKeyboard \
             -destination 'generic/platform=iOS Simulator' \
-            build \
-            | tail -60
+            build
 
       - name: Test (unit + UI)
+        # Destination uses OS=latest,name pattern so the workflow tolerates
+        # Xcode runtime-sim drift on GitHub runners. If a specific device
+        # isn't present, xcodebuild falls back to the latest iOS sim.
         run: |
-          # Destination uses OS=latest,name pattern so the workflow tolerates
-          # Xcode runtime-sim drift on GitHub runners. If a specific device
-          # isn't present, xcodebuild falls back to the latest iOS sim.
+          set -euo pipefail
           xcodebuild \
             -project WhisprLocal.xcodeproj \
             -scheme WhisprLocalApp \
             -destination 'platform=iOS Simulator,OS=latest,name=iPhone 17 Pro' \
-            test \
-            | tail -80
+            test
 
       - name: Test Shared package (swift test)
         run: swift test --package-path Shared
