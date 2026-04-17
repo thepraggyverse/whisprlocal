@@ -48,6 +48,61 @@ final class AudioCaptureServiceTests: XCTestCase {
         }
     }
 
+    // MARK: - Bugbot #2 regression — start() failure cleanup
+
+    func testStartFailureClearsStateAndDeletesOrphanWAV() async throws {
+        let tempInbox = try makeTempInbox()
+        defer { try? FileManager.default.removeItem(at: tempInbox) }
+
+        struct SimulatedEngineStartFailure: Error {}
+
+        let service = AudioCaptureService(
+            permission: StubAuthority(currentStatus: .granted, toReturn: .granted),
+            inboxURLProvider: { tempInbox },
+            engineStarter: { _ in throw SimulatedEngineStartFailure() }
+        )
+
+        // Pre-condition: inbox is empty.
+        let before = try FileManager.default.contentsOfDirectory(at: tempInbox, includingPropertiesForKeys: nil)
+        XCTAssertTrue(before.isEmpty, "inbox should start empty")
+
+        do {
+            try await service.start()
+            XCTFail("expected engineStarter to surface a failure")
+        } catch is AudioCaptureService.CaptureError {
+            // Expected: start() wraps the injected failure in .engineFailed.
+        } catch {
+            // Allowed: earlier-path failure (e.g. .sessionActivationFailed)
+            // on a simulator without a mic. Only the wrapped
+            // engineStarter path asserts the cleanup contract; bail out if
+            // we never reached it.
+            throw XCTSkip("skipping — start() bailed before engineStarter: \(error)")
+        }
+
+        // State must be fully reset — no leaked engine, converter, or
+        // partially-open WAV on retry.
+        let snapshot = service.stateSnapshotForTests
+        XCTAssertEqual(snapshot.state, .idle)
+        XCTAssertFalse(snapshot.hasEngine, "engine reference leaked after failure")
+        XCTAssertFalse(snapshot.hasConverter, "converter reference leaked after failure")
+        XCTAssertFalse(snapshot.hasOutputFile, "outputFile reference leaked after failure")
+        XCTAssertNil(snapshot.currentFileURL, "currentFileURL leaked after failure")
+
+        // And the zero-byte orphan WAV on disk must be gone — otherwise
+        // every retry grows the App Group inbox and the InboxJobWatcher
+        // would later try to transcribe an empty file.
+        let after = try FileManager.default.contentsOfDirectory(at: tempInbox, includingPropertiesForKeys: nil)
+        let wavFiles = after.filter { $0.pathExtension == "wav" }
+        XCTAssertTrue(wavFiles.isEmpty, "orphan WAV not cleaned up: \(wavFiles.map { $0.lastPathComponent })")
+    }
+
+    private func makeTempInbox() throws -> URL {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("whispr-capture-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
     func testRMSOfConstantBufferMatchesExpected() {
         let format = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,

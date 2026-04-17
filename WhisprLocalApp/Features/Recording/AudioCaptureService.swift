@@ -54,6 +54,7 @@ final class AudioCaptureService {
     private let inboxURLProvider: @Sendable () -> URL?
     private let notificationCenter: DarwinNotificationCenter
     private let sourceBundleIdProvider: @Sendable () -> String?
+    private let engineStarter: @Sendable (AVAudioEngine) throws -> Void
     private let logger = Logger(subsystem: "com.praggy.whisprlocal.app", category: "AudioCapture")
 
     private var engine: AVAudioEngine?
@@ -69,12 +70,14 @@ final class AudioCaptureService {
         permission: RecordingPermissionAuthority = AVRecordingPermissionAuthority(),
         inboxURLProvider: @escaping @Sendable () -> URL? = { AppGroupPaths.inboxURL },
         notificationCenter: DarwinNotificationCenter = SystemDarwinNotificationCenter(),
-        sourceBundleIdProvider: @escaping @Sendable () -> String? = { Bundle.main.bundleIdentifier }
+        sourceBundleIdProvider: @escaping @Sendable () -> String? = { Bundle.main.bundleIdentifier },
+        engineStarter: @escaping @Sendable (AVAudioEngine) throws -> Void = { try $0.start() }
     ) {
         self.permission = permission
         self.inboxURLProvider = inboxURLProvider
         self.notificationCenter = notificationCenter
         self.sourceBundleIdProvider = sourceBundleIdProvider
+        self.engineStarter = engineStarter
         let (stream, continuation) = AsyncStream.makeStream(of: Float.self)
         self.levelStream = stream
         self.levelContinuation = continuation
@@ -115,9 +118,34 @@ final class AudioCaptureService {
 
         engine.prepare()
         do {
-            try engine.start()
+            try engineStarter(engine)
         } catch {
             inputNode.removeTap(onBus: 0)
+
+            // Pull the URL out before we drop state so we can clean up
+            // the zero-byte WAV AVAudioFile already created on disk.
+            // Without this cleanup each retry leaves another orphan .wav
+            // behind in the App Group inbox; InboxJobWatcher would then
+            // try to transcribe an empty file.
+            let orphanURL = currentFileURL
+
+            // Drop the AVAudioFile reference *before* removing the file
+            // so the RIFF write handle is closed first; otherwise
+            // removeItem can fail silently on some volumes.
+            self.outputFile = nil
+            self.engine = nil
+            self.converter = nil
+            self.currentFileURL = nil
+
+            try? AVAudioSession.sharedInstance().setActive(
+                false,
+                options: .notifyOthersOnDeactivation
+            )
+
+            if let orphanURL {
+                try? FileManager.default.removeItem(at: orphanURL)
+            }
+
             throw CaptureError.engineFailed("engine.start() failed: \(error)")
         }
 
@@ -214,9 +242,28 @@ final class AudioCaptureService {
         state = .idle
     }
 
-    // MARK: - Helpers
+    nonisolated static func rmsLevel(of buffer: AVAudioPCMBuffer) -> Float {
+        guard let channel = buffer.floatChannelData?[0], buffer.frameLength > 0 else {
+            return 0
+        }
+        let count = Int(buffer.frameLength)
+        var sum: Float = 0
+        for idx in 0..<count {
+            let sample = channel[idx]
+            sum += sample * sample
+        }
+        let rms = sqrtf(sum / Float(count))
+        // The waveform UI expects 0...1. Speech RMS rarely exceeds ~0.25 on
+        // the 16 kHz float path, so scale x4 and clamp for a lively bar.
+        return min(1.0, rms * 4.0)
+    }
+}
 
-    private func resolveInboxURL() throws -> URL {
+// MARK: - Setup helpers
+
+extension AudioCaptureService {
+
+    fileprivate func resolveInboxURL() throws -> URL {
         guard let inboxURL = inboxURLProvider() else {
             throw CaptureError.appGroupContainerMissing
         }
@@ -227,7 +274,7 @@ final class AudioCaptureService {
         return inboxURL
     }
 
-    private func activateSession() throws {
+    fileprivate func activateSession() throws {
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setCategory(.record, mode: .measurement)
@@ -238,7 +285,7 @@ final class AudioCaptureService {
         }
     }
 
-    private func makeConverter(inputFormat: AVAudioFormat) throws -> AudioConverter {
+    fileprivate func makeConverter(inputFormat: AVAudioFormat) throws -> AudioConverter {
         do {
             return try AudioConverter(inputFormat: inputFormat)
         } catch {
@@ -246,7 +293,7 @@ final class AudioCaptureService {
         }
     }
 
-    private func openOutputFile(at url: URL, outputFormat: AVAudioFormat) throws -> AVAudioFile {
+    fileprivate func openOutputFile(at url: URL, outputFormat: AVAudioFormat) throws -> AVAudioFile {
         do {
             return try AVAudioFile(
                 forWriting: url,
@@ -259,7 +306,7 @@ final class AudioCaptureService {
         }
     }
 
-    private func installTap(
+    fileprivate func installTap(
         on inputNode: AVAudioInputNode,
         inputFormat: AVAudioFormat,
         converter: AudioConverter,
@@ -294,30 +341,39 @@ final class AudioCaptureService {
         }
     }
 
-    private func flushSerialQueue() async {
+    fileprivate func flushSerialQueue() async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             serialQueue.async {
                 continuation.resume()
             }
         }
     }
+}
 
-    nonisolated static func rmsLevel(of buffer: AVAudioPCMBuffer) -> Float {
-        guard let channel = buffer.floatChannelData?[0], buffer.frameLength > 0 else {
-            return 0
-        }
-        let count = Int(buffer.frameLength)
-        var sum: Float = 0
-        for idx in 0..<count {
-            let sample = channel[idx]
-            sum += sample * sample
-        }
-        let rms = sqrtf(sum / Float(count))
-        // The waveform UI expects 0...1. Speech RMS rarely exceeds ~0.25 on
-        // the 16 kHz float path, so scale x4 and clamp for a lively bar.
-        return min(1.0, rms * 4.0)
+#if DEBUG
+extension AudioCaptureService {
+    /// Test-only snapshot of the internal cleanup-sensitive state. Used by
+    /// the Bugbot M1 #2 regression test to verify `start()`'s failure path
+    /// leaves no dangling engine, converter, output file, or file URL.
+    struct InternalStateSnapshot: Equatable {
+        let state: State
+        let hasEngine: Bool
+        let hasConverter: Bool
+        let hasOutputFile: Bool
+        let currentFileURL: URL?
+    }
+
+    var stateSnapshotForTests: InternalStateSnapshot {
+        InternalStateSnapshot(
+            state: state,
+            hasEngine: engine != nil,
+            hasConverter: converter != nil,
+            hasOutputFile: outputFile != nil,
+            currentFileURL: currentFileURL
+        )
     }
 }
+#endif
 
 /// Small reference box so the tap closure can read the in-flight AVAudioFile
 /// without a strong capture of the capture service itself. `cancel()` clears
