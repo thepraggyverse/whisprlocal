@@ -102,7 +102,7 @@ final class WhisperEngineMitigationsTests: XCTestCase {
         let emptyCatalog = ModelCatalog(schemaVersion: 1, entries: [])
         let engine = WhisperEngine(
             catalog: emptyCatalog,
-            modelFolderURL: URL(fileURLWithPath: "/tmp/whispr-test-models", isDirectory: true)
+            modelFolderProvider: { _ in nil }
         )
         do {
             _ = try await engine.transcribe(
@@ -112,6 +112,33 @@ final class WhisperEngineMitigationsTests: XCTestCase {
             XCTFail("Expected WhisperEngine.EngineError.modelNotInCatalog")
         } catch WhisperEngine.EngineError.modelNotInCatalog(let id) {
             XCTAssertEqual(id, "does-not-exist")
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    // MARK: - Resolver contract (download/load path mismatch regression guard)
+
+    func testEngineRejectsUnDownloadedModel() async {
+        // Catalog has the entry, but the resolver returns nil — meaning
+        // the model folder is not on disk. The engine MUST fail cleanly
+        // rather than hand a bogus URL to WhisperKitConfig.modelFolder
+        // and hit WhisperKit's "modelsUnavailable: MelSpectrogram.mlmodelc"
+        // at load time. This test is the unit-level guard for the M2 sim
+        // verification bug (download-vs-load path mismatch).
+        let catalog = ModelCatalog(schemaVersion: 1, entries: [makeEntry()])
+        let engine = WhisperEngine(
+            catalog: catalog,
+            modelFolderProvider: { _ in nil }
+        )
+        do {
+            _ = try await engine.transcribe(
+                audioURL: URL(fileURLWithPath: "/tmp/fake.wav"),
+                modelId: "whisper-base"
+            )
+            XCTFail("Expected WhisperEngine.EngineError.modelNotDownloaded")
+        } catch WhisperEngine.EngineError.modelNotDownloaded(let id) {
+            XCTAssertEqual(id, "whisper-base")
         } catch {
             XCTFail("Unexpected error: \(error)")
         }

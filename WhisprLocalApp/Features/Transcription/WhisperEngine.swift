@@ -29,6 +29,7 @@ actor WhisperEngine: Transcriber {
 
     enum EngineError: LocalizedError, Equatable {
         case modelNotInCatalog(String)
+        case modelNotDownloaded(String)
         case whisperKitInitFailed(String)
         case whisperKitTranscribeFailed(String)
         case noTranscriptionResult
@@ -37,6 +38,8 @@ actor WhisperEngine: Transcriber {
             switch self {
             case .modelNotInCatalog(let id):
                 return "Model '\(id)' is not in the shipped catalog."
+            case .modelNotDownloaded(let id):
+                return "Model '\(id)' has not been downloaded yet."
             case .whisperKitInitFailed(let reason):
                 return "Could not load WhisperKit: \(reason)"
             case .whisperKitTranscribeFailed(let reason):
@@ -48,7 +51,15 @@ actor WhisperEngine: Transcriber {
     }
 
     private let catalog: ModelCatalog
-    private let modelFolderURL: URL
+
+    /// Resolver for the **deep** on-disk folder containing a model's
+    /// `.mlmodelc` files. Supplied by `ModelDownloadService` in production;
+    /// tests inject a synchronous closure. Must return the leaf folder
+    /// (e.g. `…/models/argmaxinc/whisperkit-coreml/openai_whisper-base/`),
+    /// NOT the download root — `WhisperKitConfig.modelFolder` is load-path
+    /// semantics, not cache-root semantics.
+    private let modelFolderProvider: @Sendable (ModelEntry) async -> URL?
+
     private let logger = Logger(
         subsystem: "com.praggy.whisprlocal.app",
         category: "WhisperEngine"
@@ -60,9 +71,12 @@ actor WhisperEngine: Transcriber {
     /// footprint with no user benefit).
     private var cached: (modelId: String, pipe: WhisperKit)?
 
-    init(catalog: ModelCatalog, modelFolderURL: URL) {
+    init(
+        catalog: ModelCatalog,
+        modelFolderProvider: @escaping @Sendable (ModelEntry) async -> URL?
+    ) {
         self.catalog = catalog
-        self.modelFolderURL = modelFolderURL
+        self.modelFolderProvider = modelFolderProvider
     }
 
     // MARK: - Transcriber
@@ -137,8 +151,14 @@ actor WhisperEngine: Transcriber {
             throw EngineError.modelNotInCatalog(modelId)
         }
 
-        let config = Self.makeConfig(for: entry, modelFolderURL: modelFolderURL)
-        logger.info("Loading WhisperKit model \(entry.variantName, privacy: .public)")
+        guard let resolvedFolder = await modelFolderProvider(entry) else {
+            throw EngineError.modelNotDownloaded(modelId)
+        }
+
+        let config = Self.makeConfig(for: entry, modelFolderURL: resolvedFolder)
+        logger.info(
+            "Loading WhisperKit model \(entry.variantName, privacy: .public) from \(resolvedFolder.path, privacy: .public)"
+        )
 
         let pipe: WhisperKit
         do {

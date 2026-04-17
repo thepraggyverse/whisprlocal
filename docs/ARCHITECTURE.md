@@ -237,6 +237,38 @@ container, because the keyboard never loads model weights. Application
 Support is excluded from iCloud backup by default and hidden from the
 user-visible Files app (R6 in the M2 plan).
 
+### Download path vs load path — the URL WhisperKit wants differs
+
+WhisperKit v0.18 uses two different URL semantics for the same model:
+
+- **Download** (`WhisperKit.download(variant:downloadBase:)`): HubApi
+  materializes a nested tree `<downloadBase>/models/<repo>/<variant>/…`
+  and returns the *deep* folder URL as its result. `downloadBase` is a
+  cache root, not the final location.
+- **Load** (`WhisperKitConfig.modelFolder`): expects the *deep* folder
+  URL that contains `MelSpectrogram.mlmodelc` (and friends) directly.
+  No further nesting.
+
+Passing `downloadBase` where `modelFolder` is expected — or vice versa —
+throws `WhisperError.modelsUnavailable("Model file not found at
+…/MelSpectrogram.mlmodelc")` at load time. M2's sim verification
+caught exactly this regression; the fix was to thread the deep URL
+from the service to the engine via a resolver closure:
+
+```
+WhisperEngine.init(catalog:, modelFolderProvider:)
+                                      │
+                                      ▼
+           ModelDownloadService.resolvedFolderURL(for entry:)
+                                      │
+                                      ▼
+                            deep URL → WhisperKitConfig.modelFolder
+```
+
+`WhisperEngineMitigationsTests.testEngineRejectsUnDownloadedModel` is
+the unit-level regression guard; the opt-in integration test exercises
+the real download→resolve→load round-trip with a real model.
+
 ### Service graph (main app)
 
 Everything above is wired in `WhisprLocalApp/Core/DI/AppServices.swift`,

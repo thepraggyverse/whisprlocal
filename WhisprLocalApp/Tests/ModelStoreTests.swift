@@ -125,6 +125,8 @@ private final class ImmediateFakeDownloader: ModelDownloading, @unchecked Sendab
     }
 
     func isDownloaded(entry: ModelEntry) async -> Bool { false }
+
+    func resolvedFolderURL(for entry: ModelEntry) async -> URL? { nil }
 }
 
 /// Always fails with a given message.
@@ -143,6 +145,8 @@ private struct FailingFakeDownloader: ModelDownloading {
     }
 
     func isDownloaded(entry: ModelEntry) async -> Bool { false }
+
+    func resolvedFolderURL(for entry: ModelEntry) async -> URL? { nil }
 }
 
 /// Reports a fixed set of ids as already downloaded; every other call fails.
@@ -158,5 +162,11 @@ private struct SelectivelyDownloadedFake: ModelDownloading {
 
     func isDownloaded(entry: ModelEntry) async -> Bool {
         downloadedIds.contains(entry.id)
+    }
+
+    func resolvedFolderURL(for entry: ModelEntry) async -> URL? {
+        downloadedIds.contains(entry.id)
+            ? URL(fileURLWithPath: "/tmp/fake/\(entry.variantName)")
+            : nil
     }
 }

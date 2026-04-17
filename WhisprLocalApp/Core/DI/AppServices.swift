@@ -30,7 +30,16 @@ final class AppServices {
 
         let download = ModelDownloadService(modelFolderURL: modelFolderURL)
         self.downloadService = download
-        self.engine = WhisperEngine(catalog: catalog, modelFolderURL: modelFolderURL)
+        // The engine asks the download service for the *deep* folder URL
+        // at load time. Passing the root (modelFolderURL) directly would
+        // send WhisperKit looking for MelSpectrogram.mlmodelc in the wrong
+        // directory — see ModelDownloading's path contract.
+        self.engine = WhisperEngine(
+            catalog: catalog,
+            modelFolderProvider: { [download] entry in
+                await download.resolvedFolderURL(for: entry)
+            }
+        )
         self.modelStore = ModelStore(catalog: catalog, downloadService: download)
         self.transcriptionStore = TranscriptionStore()
 

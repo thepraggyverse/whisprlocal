@@ -44,5 +44,6 @@ private struct PreviewDownloader: ModelDownloading {
         URL(fileURLWithPath: "/tmp/preview/\(entry.variantName)")
     }
     func isDownloaded(entry: ModelEntry) async -> Bool { false }
+    func resolvedFolderURL(for entry: ModelEntry) async -> URL? { nil }
 }
 #endif

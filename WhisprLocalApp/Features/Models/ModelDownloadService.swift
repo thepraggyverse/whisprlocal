@@ -4,6 +4,17 @@ import WhisperKit
 
 /// Abstract boundary around model downloading. Lets `ModelStore` swap in a
 /// fake for unit tests instead of hitting the network.
+///
+/// ### Path contract (matters for the load side)
+///
+/// WhisperKit's `download(variant:downloadBase:)` returns the **deep**
+/// folder URL that contains `MelSpectrogram.mlmodelc` directly, after
+/// HubApi has materialized a `<downloadBase>/models/<repo>/<variant>/…`
+/// tree. But `WhisperKitConfig.modelFolder` expects that same deep URL —
+/// not the download root. Conflating the two produces a runtime
+/// `modelsUnavailable` throw at load time (M2 sim verification caught
+/// this). `resolvedFolderURL(for:)` is how the engine asks this service
+/// for the correct deep URL at load time.
 protocol ModelDownloading: Sendable {
 
     /// Download the weights for `entry` and return the resulting on-disk
@@ -22,6 +33,12 @@ protocol ModelDownloading: Sendable {
     /// Whether weights for this entry are already on disk in the folder
     /// managed by this service.
     func isDownloaded(entry: ModelEntry) async -> Bool
+
+    /// The deep on-disk folder containing the model files
+    /// (`MelSpectrogram.mlmodelc` etc.) if the model has been downloaded,
+    /// else `nil`. **This is the URL to hand to
+    /// `WhisperKitConfig.modelFolder`** — NOT the download root.
+    func resolvedFolderURL(for entry: ModelEntry) async -> URL?
 }
 
 /// Production `ModelDownloading` that routes through
@@ -115,13 +132,18 @@ actor ModelDownloadService: ModelDownloading {
     }
 
     func isDownloaded(entry: ModelEntry) async -> Bool {
+        await resolvedFolderURL(for: entry) != nil
+    }
+
+    func resolvedFolderURL(for entry: ModelEntry) async -> URL? {
         if let cached = resolvedFolders[entry.id],
            FileManager.default.fileExists(atPath: cached.path) {
-            return true
+            return cached
         }
         // Best-effort probe — HubApi stores files under a nested
-        // `models/<repo>/<variant>/` tree. A match here lets us remember the
-        // path for next time.
+        // `<downloadBase>/models/<repo>/<variant>/` tree. Also tolerate the
+        // flat layout that a hand-placed / pre-seeded folder would use.
+        // A match here caches the resolved URL for subsequent load calls.
         let candidates = [
             modelFolderURL
                 .appendingPathComponent("models", isDirectory: true)
@@ -131,8 +153,8 @@ actor ModelDownloadService: ModelDownloading {
         ]
         for candidate in candidates where FileManager.default.fileExists(atPath: candidate.path) {
             resolvedFolders[entry.id] = candidate
-            return true
+            return candidate
         }
-        return false
+        return nil
     }
 }
