@@ -22,10 +22,13 @@ Packages/
 .Spotlight-V100
 .Trashes
 
-# Model weights — never commit (they're huge and user-downloaded at runtime)
+# Model weights — never commit (they're huge and user-downloaded at runtime).
+# The source directory WhisprLocalApp/Features/Models/ is intentionally tracked;
+# keep Models/ anchored to the repo root so it only catches a stray top-level
+# weights dump, never a Swift source folder named Models/.
 *.mlmodelc/
 *.mlpackage/
-Models/
+/Models/
 *.gguf
 *.safetensors
 *.bin
