@@ -7,18 +7,12 @@ import WhisprShared
 final class AudioCaptureServiceTests: XCTestCase {
 
     func testInitialStateIsIdle() {
-        let service = AudioCaptureService(
-            permission: StubAuthority(currentStatus: .granted, toReturn: .granted),
-            inboxURLProvider: { nil }
-        )
+        let service = AudioCaptureService(inboxURLProvider: { nil })
         XCTAssertEqual(service.state, .idle)
     }
 
     func testStartFailsIfAppGroupMissing() async {
-        let service = AudioCaptureService(
-            permission: StubAuthority(currentStatus: .granted, toReturn: .granted),
-            inboxURLProvider: { nil }
-        )
+        let service = AudioCaptureService(inboxURLProvider: { nil })
         do {
             try await service.start()
             XCTFail("expected error")
@@ -30,10 +24,7 @@ final class AudioCaptureServiceTests: XCTestCase {
     }
 
     func testStopFromIdleThrowsInvalidState() async {
-        let service = AudioCaptureService(
-            permission: StubAuthority(currentStatus: .granted, toReturn: .granted),
-            inboxURLProvider: { nil }
-        )
+        let service = AudioCaptureService(inboxURLProvider: { nil })
         do {
             _ = try await service.stop()
             XCTFail("expected error")
@@ -57,7 +48,6 @@ final class AudioCaptureServiceTests: XCTestCase {
         struct SimulatedEngineStartFailure: Error {}
 
         let service = AudioCaptureService(
-            permission: StubAuthority(currentStatus: .granted, toReturn: .granted),
             inboxURLProvider: { tempInbox },
             engineStarter: { _ in throw SimulatedEngineStartFailure() }
         )
@@ -208,14 +198,6 @@ final class AudioCaptureServiceTests: XCTestCase {
             XCTAssertEqual(stem, "not-a-uuid")
         }
         XCTAssertTrue(center.postedNames.isEmpty, "should not post on failure")
-    }
-
-    // MARK: - Stub
-
-    private struct StubAuthority: RecordingPermissionAuthority {
-        let currentStatus: RecordingPermissionStatus
-        let toReturn: RecordingPermissionStatus
-        func request() async -> RecordingPermissionStatus { toReturn }
     }
 }
 

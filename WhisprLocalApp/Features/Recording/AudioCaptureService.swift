@@ -50,7 +50,6 @@ final class AudioCaptureService {
     let levelStream: AsyncStream<Float>
     private let levelContinuation: AsyncStream<Float>.Continuation
 
-    private let permission: RecordingPermissionAuthority
     private let inboxURLProvider: @Sendable () -> URL?
     private let notificationCenter: DarwinNotificationCenter
     private let sourceBundleIdProvider: @Sendable () -> String?
@@ -67,13 +66,11 @@ final class AudioCaptureService {
     )
 
     init(
-        permission: RecordingPermissionAuthority = AVRecordingPermissionAuthority(),
         inboxURLProvider: @escaping @Sendable () -> URL? = { AppGroupPaths.inboxURL },
         notificationCenter: DarwinNotificationCenter = SystemDarwinNotificationCenter(),
         sourceBundleIdProvider: @escaping @Sendable () -> String? = { Bundle.main.bundleIdentifier },
         engineStarter: @escaping @Sendable (AVAudioEngine) throws -> Void = { try $0.start() }
     ) {
-        self.permission = permission
         self.inboxURLProvider = inboxURLProvider
         self.notificationCenter = notificationCenter
         self.sourceBundleIdProvider = sourceBundleIdProvider
