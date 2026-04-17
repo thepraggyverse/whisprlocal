@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build + test (iOS Simulator)
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        # GitHub's macos-15 image ships multiple Xcode versions; pin to the
+        # one closest to the local dev setup (Xcode 16+). Bump when we move
+        # to a newer iOS deployment floor.
+        run: |
+          sudo xcode-select -s /Applications/Xcode_16.app || true
+          xcodebuild -version
+
+      - name: Install toolchain via Mint
+        run: |
+          brew install mint
+          mint bootstrap
+
+      - name: Generate Xcode project
+        run: mint run xcodegen generate
+
+      - name: Lint (SwiftLint, strict)
+        run: mint run swiftlint --strict
+
+      - name: Privacy pattern audit (inline — single source of truth with /audit-privacy)
+        run: |
+          set -e
+          echo "→ Forbidden analytics/crash SDK imports"
+          ! rg -i --type swift '^\s*import\s+(Mixpanel|Segment|Firebase|Sentry|Amplitude|PostHog|Bugsnag|Crashlytics|Datadog|Adjust|AppsFlyer|Branch)' .
+          echo "→ Cloud AI SDK imports"
+          ! rg -in 'import\s+(OpenAI|Anthropic|GoogleGenerativeAI|OpenAIKit)' .
+          echo "→ ML imports inside the keyboard extension (blows 48 MB ceiling)"
+          ! rg -n --type swift '^\s*import\s+(WhisperKit|MLX|MLXLLM|MLXLMCommon|MLXNN|MLXRandom|MLXFast|CoreML)' WhisprKeyboard/
+          echo "→ UIPasteboard inside the keyboard extension"
+          ! rg -n --type swift 'UIPasteboard' WhisprKeyboard/
+          echo "→ ATS config present with huggingface.co allowlist"
+          rg -n 'NSAppTransportSecurity|NSExceptionDomains' project.yml
+          rg -n 'huggingface\.co' project.yml
+          echo "All privacy checks passed."
+
+      - name: Build main app
+        run: |
+          xcodebuild \
+            -project WhisprLocal.xcodeproj \
+            -scheme WhisprLocalApp \
+            -destination 'generic/platform=iOS Simulator' \
+            build \
+            | tail -60
+
+      - name: Build keyboard extension
+        run: |
+          xcodebuild \
+            -project WhisprLocal.xcodeproj \
+            -scheme WhisprKeyboard \
+            -destination 'generic/platform=iOS Simulator' \
+            build \
+            | tail -60
+
+      - name: Test (unit + UI)
+        run: |
+          # Destination uses OS=latest,name pattern so the workflow tolerates
+          # Xcode runtime-sim drift on GitHub runners. If a specific device
+          # isn't present, xcodebuild falls back to the latest iOS sim.
+          xcodebuild \
+            -project WhisprLocal.xcodeproj \
+            -scheme WhisprLocalApp \
+            -destination 'platform=iOS Simulator,OS=latest,name=iPhone 17 Pro' \
+            test \
+            | tail -80
+
+      - name: Test Shared package (swift test)
+        run: swift test --package-path Shared
