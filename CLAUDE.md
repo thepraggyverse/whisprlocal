@@ -60,6 +60,14 @@ xcodebuild test -scheme WhisprLocalApp \
 swiftlint --strict
 ```
 
+Sim destination uses `OS=latest,name=iPhone <N> Pro` where `N` is the highest Pro
+tier shipped with the installed Xcode. Pro tier matters because
+`com.apple.developer.kernel.increased-memory-limit` behavior and Neural Engine
+core counts differ from the non-Pro variants — using the Pro sim keeps test
+conditions close to the iPhone 15 Pro / iPhone 16 Pro targets in
+`PROJECT_SPEC.md` §2. Bump the device name when a new Xcode rev ships newer
+Pro sims.
+
 Do not invent build commands. If something here is stale, update this file.
 
 Privacy / forbidden-pattern checks run via the `/audit-privacy` slash command
