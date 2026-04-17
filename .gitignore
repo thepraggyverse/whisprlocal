@@ -46,6 +46,7 @@ WhisprKeyboard/Info.plist
 # Claude Code local state (shared: commands/, settings.json; local: below)
 .claude/local/
 .claude/session/
+.claude/scheduled_tasks.lock
 
 # IDE
 .idea/

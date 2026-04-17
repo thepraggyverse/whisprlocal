@@ -23,11 +23,24 @@ final class AudioCaptureService {
         case finalizing
     }
 
-    enum CaptureError: Error, Equatable {
+    enum CaptureError: LocalizedError, Equatable {
         case invalidState(State)
         case appGroupContainerMissing
         case sessionActivationFailed
         case engineFailed(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .invalidState(let state):
+                return "Recorder was in \(state) state, cannot transition."
+            case .appGroupContainerMissing:
+                return "App Group container is unavailable — check the capability and entitlements."
+            case .sessionActivationFailed:
+                return "The audio session could not be activated."
+            case .engineFailed(let reason):
+                return "Audio engine failed: \(reason)"
+            }
+        }
     }
 
     private(set) var state: State = .idle

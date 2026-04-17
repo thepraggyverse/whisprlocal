@@ -97,6 +97,7 @@ standalone `scripts/audit-privacy.sh` — one source of truth.
 - **Do not exceed iOS 17 minimum** without asking.
 - **Do not add dependencies** beyond the ones listed in the spec without asking.
 - **Do not silently change privacy posture.** Any new network call, new file write, new `Info.plist` key that touches privacy = stop and ask.
+- **Do not set `CODE_SIGNING_ALLOWED: NO` on any build config** — even Debug. iOS Simulator uses ad-hoc signing ("-") for free; disabling signing strips the entitlements file from the binary at runtime, which silently breaks App Groups, Keychain, push notifications, and anything else entitlement-gated. Symptom: runtime "client is not entitled" errors with no build-time warning. Fix: leave signing enabled; use `CODE_SIGN_STYLE: Automatic` + `DEVELOPMENT_TEAM` blank for simulator-only Debug.
 
 ## Session workflow
 

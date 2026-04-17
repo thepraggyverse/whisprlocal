@@ -10,6 +10,10 @@ Surprises: entitlements files got silently clobbered when xcodegen's `entitlemen
 
 For M1: verify tool availability on the target environment before writing the code that depends on it — check `gh api repos/actions/runner-images/contents/images/macos` (or equivalent) the first time I reach for any CLI tool in CI, not after the red X.
 
+Post-CI-green bug caught via simulator verification: `CaptureError` code 2 on record tap. Root cause: `CODE_SIGNING_ALLOWED: NO` in Debug stripped the App Group entitlement from the binary. CI didn't catch it because tests stubbed the inbox URL provider. Fix: re-enable signing on Debug (simulator uses free ad-hoc identity), add regression test that asserts `AppGroupPaths.containerURL` is non-nil, add CI step that greps the binary for the entitlement, codify in CLAUDE.md anti-patterns.
+
+Lesson: "green CI" is necessary but not sufficient. The simulator verification gate exists precisely for entitlement/runtime-config bugs that test suites (by their nature) mock away. This case validates the "PR stays draft until human verifies on simulator" rule from Mode 2.
+
 ### Lessons codified back into project rules
 - [x] Add to CLAUDE.md anti-patterns: "Do not use xcodegen `entitlements:` key without inline `properties:` — silently clobbers hand-written entitlements files. Use `CODE_SIGN_ENTITLEMENTS` build setting to reference them instead." — applied at M1 kickoff.
 - [x] Add to CLAUDE.md session workflow: "Before writing CI code that depends on a CLI tool, verify the tool is preinstalled on the target runner image (check the macos-15 image manifest at github.com/actions/runner-images)." — applied at M1 kickoff.

@@ -25,7 +25,15 @@ settings:
     Debug:
       SWIFT_OPTIMIZATION_LEVEL: -Onone
       SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
-      CODE_SIGNING_ALLOWED: NO
+      # iOS Simulator supports ad-hoc signing ("-") with zero cert setup,
+      # and signing is REQUIRED for entitlements (and thus App Group
+      # access) to attach to the binary. We force ad-hoc for Debug so
+      # sim builds get the .entitlements file embedded without needing a
+      # real developer identity (which would make CI brittle). Device
+      # Debug builds should override this in Xcode if needed.
+      CODE_SIGN_IDENTITY: "-"
+      AD_HOC_CODE_SIGNING_ALLOWED: YES
+      CODE_SIGN_STYLE: Automatic
     Release:
       SWIFT_OPTIMIZATION_LEVEL: -O
       CODE_SIGN_STYLE: Automatic
@@ -84,6 +92,12 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.praggy.whisprlocal.app
         TARGETED_DEVICE_FAMILY: "1,2"
         CODE_SIGN_ENTITLEMENTS: WhisprLocalApp/WhisprLocalApp.entitlements
+      configs:
+        Debug:
+          # Target-level overrides xcodegen's implicit "iPhone Developer"
+          # default so sim Debug builds use ad-hoc signing and attach the
+          # entitlements file. Rationale in the project-level Debug config.
+          CODE_SIGN_IDENTITY: "-"
     scheme:
       testTargets:
         - WhisprLocalAppTests
@@ -122,6 +136,11 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.praggy.whisprlocal.app.keyboard
         TARGETED_DEVICE_FAMILY: "1,2"
         CODE_SIGN_ENTITLEMENTS: WhisprKeyboard/WhisprKeyboard.entitlements
+      configs:
+        Debug:
+          # See WhisprLocalApp target for rationale — sim Debug must use
+          # ad-hoc signing for the app-groups entitlement to embed.
+          CODE_SIGN_IDENTITY: "-"
 
   # --- Tests -------------------------------------------------------------
   WhisprLocalAppTests:
@@ -136,6 +155,13 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.praggy.whisprlocal.app.Tests
+        # Signing is now on for Debug, so test bundles need an Info.plist
+        # to sign. Let Xcode synthesize one — we have no reason to hand-
+        # write one for a test bundle.
+        GENERATE_INFOPLIST_FILE: YES
+      configs:
+        Debug:
+          CODE_SIGN_IDENTITY: "-"
 
   WhisprLocalAppUITests:
     type: bundle.ui-testing
@@ -147,3 +173,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.praggy.whisprlocal.app.UITests
+        GENERATE_INFOPLIST_FILE: YES
+      configs:
+        Debug:
+          CODE_SIGN_IDENTITY: "-"
